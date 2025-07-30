@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2 class="mb-4">Head to Head Analysis</h2>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form id="h2hForm">
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    <label for="player1" class="form-label">Player 1</label>
+                    <input type="text" class="form-control" id="player1" name="player1" 
+                           placeholder="e.g., Serena Williams" required>
+                </div>
+                <div class="col-md-6 mb-3">
+                    <label for="player2" class="form-label">Player 2</label>
+                    <input type="text" class="form-control" id="player2" name="player2" 
+                           placeholder="e.g., Venus Williams" required>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-success">
+                <i class="fas fa-users"></i> View Head to Head
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="loading mt-4">
+    <div class="spinner-border text-success" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="text-muted mt-2">Fetching match history...</p>
+</div>
+
+<div class="alert alert-danger error-message" role="alert"></div>
+
+<div id="results" class="mt-4"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function getSurfaceClass(surface) {
+    const surfaceMap = {
+        'Hard': 'surface-hard',
+        'Clay': 'surface-clay',
+        'Grass': 'surface-grass'
+    };
+    return surfaceMap[surface] || 'surface-hard';
+}
+
+$('#h2hForm').on('submit', function(e) {
+    e.preventDefault();
+    
+    $('.loading').show();
+    $('.error-message').hide();
+    $('#results').empty();
+    
+    $.ajax({
+        url: '/h2h',
+        method: 'POST',
+        data: $(this).serialize(),
+        success: function(response) {
+            $('.loading').hide();
+            
+            // Create summary section
+            let summaryHtml = `
+                <div class="hero-section text-center mb-4">
+                    <h3>${response.summary.player1} vs ${response.summary.player2}</h3>
+                    <div class="row mt-4">
+                        <div class="col-md-4">
+                            <div class="stat-value">${response.summary.p1_wins}</div>
+                            <div class="stat-label text-white-50">${response.summary.player1} Wins</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="stat-value">${response.summary.total_matches}</div>
+                            <div class="stat-label text-white-50">Total Matches</div>
+                        </div>
+                        <div class="col-md-4">
+                            <div class="stat-value">${response.summary.p2_wins}</div>
+                            <div class="stat-label text-white-50">${response.summary.player2} Wins</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Create surface breakdown if available
+            if (response.summary.surface_breakdown) {
+                summaryHtml += '<div class="row mb-4">';
+                for (const [surface, data] of Object.entries(response.summary.surface_breakdown)) {
+                    summaryHtml += `
+                        <div class="col-md-4">
+                            <div class="stat-card">
+                                <div class="stat-label">${surface} Court</div>
+                                <div class="d-flex justify-content-between mt-2">
+                                    <div>
+                                        <span class="player1-value">${data[response.summary.player1] || 0}</span>
+                                        <small class="text-muted d-block">${response.summary.player1}</small>
+                                    </div>
+                                    <div class="text-muted align-self-center">-</div>
+                                    <div class="text-end">
+                                        <span class="player2-value">${data[response.summary.player2] || 0}</span>
+                                        <small class="text-muted d-block">${response.summary.player2}</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                }
+                summaryHtml += '</div>';
+            }
+            
+            // Create matches list
+            let matchesHtml = `
+                <div class="card shadow-sm">
+                    <div class="card-header">
+                        <h5 class="mb-0">Match History</h5>
+                    </div>
+                    <div class="card-body">
+            `;
+            
+            response.matches.forEach((match, index) => {
+                const isP1Winner = match.winner_name === response.summary.player1;
+                matchesHtml += `
+                    <div class="match-card">
+                        <div class="row align-items-center">
+                            <div class="col-md-2">
+                                <small class="text-muted">${match.match_date}</small>
+                                <div class="mt-1">
+                                    <span class="badge ${getSurfaceClass(match.surface)}">${match.surface}</span>
+                                </div>
+                            </div>
+                            <div class="col-md-3">
+                                <strong>${match.tournament}</strong>
+                                <div><small class="text-muted">${match.round}</small></div>
+                            </div>
+                            <div class="col-md-4 text-center">
+                                <div class="${isP1Winner ? 'player1-value' : 'text-muted'}">
+                                    ${response.summary.player1} ${isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
+                                </div>
+                                <div class="my-1"><strong>${match.score}</strong></div>
+                                <div class="${!isP1Winner ? 'player2-value' : 'text-muted'}">
+                                    ${response.summary.player2} ${!isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
+                                </div>
+                            </div>
+                            <div class="col-md-3 text-end">
+                                <span class="badge bg-secondary">${match.h2h}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            matchesHtml += '</div></div>';
+            
+            $('#results').html(summaryHtml + matchesHtml);
+        },
+        error: function(xhr) {
+            $('.loading').hide();
+            let errorMsg = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
+            $('.error-message').text(errorMsg).show();
+        }
+    });
+});
+</script>
+{% endblock %}

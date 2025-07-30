@@ -1,0 +1,229 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h2 class="mb-4">Career Statistics</h2>
+
+<div class="card shadow-sm">
+    <div class="card-body">
+        <form id="careerForm">
+            <div class="row">
+                <div class="col-md-8 mb-3">
+                    <label for="player" class="form-label">Player Name</label>
+                    <input type="text" class="form-control" id="player" name="player" 
+                           placeholder="e.g., Roger Federer" required>
+                </div>
+                <div class="col-md-4 mb-3 d-flex align-items-end">
+                    <button type="submit" class="btn btn-warning w-100">
+                        <i class="fas fa-trophy"></i> View Career Stats
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="loading mt-4">
+    <div class="spinner-border text-warning" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="text-muted mt-2">Analyzing career statistics...</p>
+</div>
+
+<div class="alert alert-danger error-message" role="alert"></div>
+
+<div id="results" class="mt-4"></div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+let careerData = null;
+let currentYear = null;
+
+function displayYearStats(year) {
+    currentYear = year;
+    
+    // Update active button
+    $('.year-btn').removeClass('active');
+    $(`.year-btn[data-year="${year}"]`).addClass('active');
+    
+    // Find year data
+    const yearData = year === 'career' ? careerData.career_summary : 
+                     careerData.yearly_stats.find(y => y.year == year);
+    
+    if (!yearData) return;
+    
+    // Create stats display
+    let statsHtml = `
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="stat-card text-center">
+                    <div class="stat-label">Win-Loss Record</div>
+                    <div class="stat-value">${yearData['W-L']}</div>
+                    <div class="text-muted">${yearData['win%']}% Win Rate</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card text-center">
+                    <div class="stat-label">Service Hold %</div>
+                    <div class="stat-value">${yearData['hold%']}%</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card text-center">
+                    <div class="stat-label">Break %</div>
+                    <div class="stat-value">${yearData['break%']}%</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card text-center">
+                    <div class="stat-label">Ace %</div>
+                    <div class="stat-value">${yearData['ace%']}%</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="card shadow-sm">
+            <div class="card-header">
+                <h5 class="mb-0">Detailed Statistics ${year === 'career' ? '(Career)' : year}</h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-primary mb-3">Serving Statistics</h6>
+                        <div class="stat-comparison">
+                            <span>1st Serve In %</span>
+                            <span class="player-value">${yearData['1st_in%']}%</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>1st Serve Win %</span>
+                            <span class="player-value">${yearData['1st_win%']}%</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>2nd Serve Win %</span>
+                            <span class="player-value">${yearData['2nd_win%']}%</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>Double Fault %</span>
+                            <span class="player-value">${yearData['df%']}%</span>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-success mb-3">Break Point Statistics</h6>
+                        <div class="stat-comparison">
+                            <span>Break Points Saved %</span>
+                            <span class="player-value">${yearData['bp_saved%']}%</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>Service Hold %</span>
+                            <span class="player-value">${yearData['hold%']}%</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>Break %</span>
+                            <span class="player-value">${yearData['break%']}%</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>Avg Opponent Rank</span>
+                            <span class="player-value">${yearData['avg_opp_rank']}</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    $('#yearStats').html(statsHtml);
+}
+
+$('#careerForm').on('submit', function(e) {
+    e.preventDefault();
+    
+    $('.loading').show();
+    $('.error-message').hide();
+    $('#results').empty();
+    
+    $.ajax({
+        url: '/career',
+        method: 'POST',
+        data: $(this).serialize(),
+        success: function(response) {
+            $('.loading').hide();
+            careerData = response;
+            
+            // Create year navigation
+            let yearNavHtml = '<div class="year-nav">';
+            yearNavHtml += '<button class="year-btn" data-year="career" onclick="displayYearStats(\'career\')">Career</button>';
+            
+            response.yearly_stats.forEach(yearStat => {
+                yearNavHtml += `<button class="year-btn" data-year="${yearStat.year}" onclick="displayYearStats(${yearStat.year})">${yearStat.year}</button>`;
+            });
+            yearNavHtml += '</div>';
+            
+            // Create container for stats
+            let containerHtml = `
+                <div class="hero-section text-center">
+                    <h3>${response.player}</h3>
+                    <p class="mb-0">Career Overview & Year-by-Year Statistics</p>
+                </div>
+                ${yearNavHtml}
+                <div id="yearStats"></div>
+                
+                <div class="card shadow-sm mt-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">Career Progression Chart</h5>
+                    </div>
+                    <div class="card-body">
+                        <canvas id="progressionChart" height="100"></canvas>
+                    </div>
+                </div>
+            `;
+            
+            $('#results').html(containerHtml);
+            
+            // Display career stats by default
+            displayYearStats('career');
+            
+            // Create progression chart
+            const years = response.yearly_stats.map(y => y.year);
+            const winPercentages = response.yearly_stats.map(y => y['win%']);
+            const holdPercentages = response.yearly_stats.map(y => y['hold%']);
+            
+            new Chart(document.getElementById('progressionChart'), {
+                type: 'line',
+                data: {
+                    labels: years,
+                    datasets: [{
+                        label: 'Win %',
+                        data: winPercentages,
+                        borderColor: 'rgb(30, 58, 138)',
+                        backgroundColor: 'rgba(30, 58, 138, 0.1)',
+                        tension: 0.3
+                    }, {
+                        label: 'Hold %',
+                        data: holdPercentages,
+                        borderColor: 'rgb(16, 185, 129)',
+                        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                        tension: 0.3
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            min: 40,
+                            max: 100
+                        }
+                    }
+                }
+            });
+        },
+        error: function(xhr) {
+            $('.loading').hide();
+            let errorMsg = xhr.responseJSON ? xhr.responseJSON.error : 'An error occurred';
+            $('.error-message').text(errorMsg).show();
+        }
+    });
+});
+</script>
+{% endblock %}
