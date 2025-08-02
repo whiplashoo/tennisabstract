@@ -2,7 +2,11 @@ from flask import Flask, render_template, request, jsonify
 import pandas as pd
 from mod import (
     get_player_matches, 
-    calculate_yearly_stats, 
+    get_player_list,
+    calculate_yearly_stats,
+    calculate_career_stats, 
+    calculate_surface_breakdown,
+    calculate_recent_form,
     format_h2h_matches,
     compare,
     career
@@ -22,6 +26,15 @@ def dataframe_to_dict(df):
 def index():
     return render_template('index.html')
 
+@app.route('/api/players')
+def api_get_players():
+    """API endpoint for player autocomplete"""
+    try:
+        players = get_player_list()
+        return jsonify({'players': players})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/compare', methods=['GET', 'POST'])
 def compare_players():
     if request.method == 'POST':
@@ -32,24 +45,48 @@ def compare_players():
         if not player1 or not player2:
             return jsonify({'error': 'Please enter both player names'}), 400
         
-        result = compare(player1, player2, year)
+        # Get matches for both players
+        p1_matches = get_player_matches(player1)
+        p2_matches = get_player_matches(player2)
         
-        if result is None:
-            return jsonify({'error': 'Players not found or no data for the selected year'}), 404
+        if p1_matches is None or p2_matches is None:
+            return jsonify({'error': 'One or both players not found'}), 404
         
-        # Convert DataFrame to structured data
-        stats_data = []
-        for index, row in result.iterrows():
-            stats_data.append({
-                'stat': index,
-                'player1_value': row[player1],
-                'player2_value': row[player2],
-                'player1_name': player1,
-                'player2_name': player2
-            })
+        # Calculate stats for all surfaces
+        all_surfaces_stats = {}
+        surfaces = ['All', 'Hard', 'Clay', 'Grass', 'Carpet']
+        
+        for surface in surfaces:
+            surface_filter = None if surface == 'All' else surface
+            try:
+                p1_stats = calculate_yearly_stats(p1_matches, surface_filter)
+                p2_stats = calculate_yearly_stats(p2_matches, surface_filter)
+                
+                if year in p1_stats.index and year in p2_stats.index:
+                    p1_data = p1_stats.loc[year]
+                    p2_data = p2_stats.loc[year]
+                    
+                    # Convert to structured data
+                    stats_data = []
+                    for stat in p1_data.index:
+                        if stat != 'surface':  # Skip surface indicator
+                            stats_data.append({
+                                'stat': stat,
+                                'player1_value': p1_data[stat],
+                                'player2_value': p2_data[stat],
+                                'player1_name': player1,
+                                'player2_name': player2
+                            })
+                    
+                    all_surfaces_stats[surface] = stats_data
+            except:
+                continue
+        
+        if not all_surfaces_stats:
+            return jsonify({'error': 'No data available for the selected year'}), 404
         
         return jsonify({
-            'stats': stats_data,
+            'all_surfaces_stats': all_surfaces_stats,
             'player1': player1,
             'player2': player2,
             'year': year
@@ -115,10 +152,39 @@ def career_stats():
         if not player_name:
             return jsonify({'error': 'Please enter a player name'}), 400
         
+        # Get player matches
+        matches = get_player_matches(player_name)
+        if matches is None:
+            return jsonify({'error': f'Player {player_name} not found'}), 404
+        
         career_data = career(player_name)
         
         if career_data is None:
-            return jsonify({'error': f'Player {player_name} not found'}), 404
+            return jsonify({'error': f'No data available for {player_name}'}), 404
+        
+        # Get recent form
+        recent_form = calculate_recent_form(matches)
+        
+        # Get surface breakdown with yearly details
+        surface_breakdown = {}
+        for surface in ['Hard', 'Clay', 'Grass', 'Carpet']:
+            surface_stats = calculate_yearly_stats(matches, surface)
+            if not surface_stats.empty:
+                # Convert to dict with years as keys
+                surface_yearly = {}
+                for year in surface_stats.index:
+                    year_data = surface_stats.loc[year].to_dict()
+                    year_data['year'] = int(year)
+                    surface_yearly[str(year)] = year_data
+                
+                # Calculate surface career totals
+                surface_matches = matches[matches['surf'] == surface]
+                surface_career = calculate_career_stats(surface_matches)
+                if not surface_career.empty:
+                    surface_breakdown[surface] = {
+                        'yearly': surface_yearly,
+                        'career': surface_career.iloc[0].to_dict()
+                    }
         
         # Separate yearly stats from career summary
         yearly_stats = career_data[career_data.index != 'career'].copy()
@@ -137,6 +203,8 @@ def career_stats():
         return jsonify({
             'yearly_stats': yearly_data,
             'career_summary': career_summary,
+            'recent_form': recent_form,
+            'surface_breakdown': surface_breakdown,
             'player': player_name
         })
     

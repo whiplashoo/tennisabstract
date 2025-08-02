@@ -44,14 +44,24 @@
 
 <div class="alert alert-danger error-message" role="alert"></div>
 
+<!-- Surface filter (shown after results) -->
+<div id="surfaceFilter" class="mt-4" style="display: none;">
+    <div class="btn-group" role="group">
+        <!-- Buttons will be dynamically added based on available data -->
+    </div>
+</div>
+
 <div id="results" class="mt-4"></div>
 {% endblock %}
 
 {% block extra_js %}
 <script>
+let allSurfacesData = null;
+let currentSurface = 'All';
+
 // Helper function to determine better value
 function isBetterValue(stat, val1, val2) {
-    const lowerIsBetter = ['df%', 'losses'];
+    const lowerIsBetter = ['df%', 'losses', 'avg_opp_rank'];
     if (lowerIsBetter.includes(stat)) {
         return val1 < val2;
     }
@@ -71,9 +81,210 @@ function formatStatName(stat) {
         'bp_saved%': 'Break Points Saved %',
         'hold%': 'Service Hold %',
         'break%': 'Break Percentage',
-        'avg_opp_rank': 'Avg Opponent Rank'
+        'avg_opp_rank': 'Avg Opponent Rank',
+        'matches_with_stats%': 'Matches with Stats %'
     };
     return statNames[stat] || stat;
+}
+
+// Surface filter click handler
+$(document).on('click', '#surfaceFilter button', function() {
+    $('#surfaceFilter button').removeClass('active');
+    $(this).addClass('active');
+    currentSurface = $(this).data('surface');
+    displayComparison(currentSurface);
+});
+
+function displayComparison(surface) {
+    const statsData = allSurfacesData[surface];
+    
+    if (!statsData || statsData.length === 0) {
+        $('#results').html(`
+            <div class="alert alert-warning">
+                No data available for ${surface} surface in the selected year.
+            </div>
+        `);
+        return;
+    }
+    
+    // Add surface indicator if filtered
+    let surfaceIndicator = '';
+    if (surface !== 'All') {
+        surfaceIndicator = `<div class="alert alert-info mb-3">
+            <i class="fas fa-filter"></i> Showing statistics for <strong>${surface}</strong> court only
+        </div>`;
+    }
+    
+    // Create key stats cards
+    let keyStatsHtml = '<div class="row mb-4">';
+    
+    // Find key statistics
+    const keyStats = ['win%', 'ace%', 'hold%', 'break%'];
+    
+    keyStats.forEach(stat => {
+        const statData = statsData.find(s => s.stat === stat);
+        if (statData) {
+            const p1Better = isBetterValue(stat, statData.player1_value, statData.player2_value);
+            keyStatsHtml += `
+                <div class="col-md-3">
+                    <div class="stat-card text-center">
+                        <div class="stat-label">${formatStatName(stat)}</div>
+                        <div class="d-flex justify-content-around mt-3">
+                            <div>
+                                <div class="player1-value">${statData.player1_value}</div>
+                                <small class="text-muted">${statData.player1_name}</small>
+                                ${p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
+                            </div>
+                            <div>
+                                <div class="player2-value">${statData.player2_value}</div>
+                                <small class="text-muted">${statData.player2_name}</small>
+                                ${!p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+    });
+    
+    keyStatsHtml += '</div>';
+    
+    // Create detailed comparison
+    let detailsHtml = `
+        <div class="card shadow-sm">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">Detailed Statistics</h5>
+            </div>
+            <div class="card-body">
+    `;
+    
+    statsData.forEach(stat => {
+        const p1Val = stat.player1_value;
+        const p2Val = stat.player2_value;
+        let p1Better = false;
+        
+        if (stat.stat !== 'W-L') {
+            p1Better = isBetterValue(stat.stat, parseFloat(p1Val) || 0, parseFloat(p2Val) || 0);
+        }
+        
+        detailsHtml += `
+            <div class="stat-comparison">
+                <div style="width: 30%">
+                    <span class="stat-label">${formatStatName(stat.stat)}</span>
+                </div>
+                <div style="width: 25%; text-align: right;">
+                    <span class="player-value player1-value">
+                        ${p1Val}
+                        ${p1Better && stat.stat !== 'W-L' ? '<i class="fas fa-caret-up text-success ms-1"></i>' : ''}
+                    </span>
+                </div>
+                <div style="width: 20%; text-align: center;">
+                    <div class="progress" style="height: 6px;">
+                        ${stat.stat !== 'W-L' ? `
+                            <div class="progress-bar bg-primary" style="width: ${p1Better ? '100%' : '0%'}"></div>
+                        ` : ''}
+                    </div>
+                </div>
+                <div style="width: 25%; text-align: left;">
+                    <span class="player-value player2-value">
+                        ${p2Val}
+                        ${!p1Better && stat.stat !== 'W-L' ? '<i class="fas fa-caret-up text-success ms-1"></i>' : ''}
+                    </span>
+                </div>
+            </div>
+        `;
+    });
+    
+    detailsHtml += '</div></div>';
+    
+    // Add chart for serve stats
+    let chartHtml = `
+        <div class="card shadow-sm mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">Serve Performance Comparison</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 400px;">
+                    <canvas id="serveChart"></canvas>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    $('#results').html(surfaceIndicator + keyStatsHtml + detailsHtml + chartHtml);
+    
+    // Create chart with fixed radar chart
+    const serveStats = ['1st_in%', '1st_win%', '2nd_win%', 'ace%'];
+    const p1Data = [];
+    const p2Data = [];
+    const labels = [];
+    
+    serveStats.forEach(stat => {
+        const statData = statsData.find(s => s.stat === stat);
+        if (statData) {
+            labels.push(formatStatName(stat));
+            p1Data.push(parseFloat(statData.player1_value) || 0);
+            p2Data.push(parseFloat(statData.player2_value) || 0);
+        }
+    });
+    
+    // Destroy existing chart if it exists
+    if (window.serveChart && window.serveChart instanceof Chart) {
+        window.serveChart.destroy();
+    }
+    
+    // Only create chart if we have data
+    if (labels.length > 0) {
+        const ctx = document.getElementById('serveChart').getContext('2d');
+        window.serveChart = new Chart(ctx, {
+            type: 'radar',
+            data: {
+                labels: labels,
+                datasets: [{
+                    label: statsData[0].player1_name,
+                    data: p1Data,
+                    borderColor: 'rgb(30, 58, 138)',
+                    backgroundColor: 'rgba(30, 58, 138, 0.1)',
+                    borderWidth: 2,
+                    pointBackgroundColor: 'rgb(30, 58, 138)',
+                    pointBorderColor: '#fff',
+                    pointHoverBackgroundColor: '#fff',
+                    pointHoverBorderColor: 'rgb(30, 58, 138)'
+                }, {
+                    label: statsData[0].player2_name,
+                    data: p2Data,
+                    borderColor: 'rgb(16, 185, 129)',
+                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    borderWidth: 2,
+                    pointBackgroundColor: 'rgb(16, 185, 129)',
+                    pointBorderColor: '#fff',
+                    pointHoverBackgroundColor: '#fff',
+                    pointHoverBorderColor: 'rgb(16, 185, 129)'
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: {
+                        position: 'top',
+                    }
+                },
+                scales: {
+                    r: {
+                        angleLines: {
+                            display: true
+                        },
+                        suggestedMin: 0,
+                        suggestedMax: 100,
+                        ticks: {
+                            stepSize: 20
+                        }
+                    }
+                }
+            }
+        });
+    }
 }
 
 $('#compareForm').on('submit', function(e) {
@@ -82,6 +293,7 @@ $('#compareForm').on('submit', function(e) {
     $('.loading').show();
     $('.error-message').hide();
     $('#results').empty();
+    $('#surfaceFilter').hide();
     
     $.ajax({
         url: '/compare',
@@ -90,146 +302,28 @@ $('#compareForm').on('submit', function(e) {
         success: function(response) {
             $('.loading').hide();
             
-            // Create key stats cards
-            let keyStatsHtml = '<div class="row mb-4">';
+            allSurfacesData = response.all_surfaces_stats;
             
-            // Find key statistics
-            const keyStats = ['win%', 'ace%', 'hold%', 'break%'];
-            const statsData = response.stats;
+            // Build surface filter with only available surfaces
+            let surfaceFilterHtml = '';
+            const availableSurfaces = Object.keys(allSurfacesData).filter(surface => 
+                allSurfacesData[surface] && allSurfacesData[surface].length > 0
+            );
             
-            keyStats.forEach(stat => {
-                const statData = statsData.find(s => s.stat === stat);
-                if (statData) {
-                    const p1Better = isBetterValue(stat, statData.player1_value, statData.player2_value);
-                    keyStatsHtml += `
-                        <div class="col-md-3">
-                            <div class="stat-card text-center">
-                                <div class="stat-label">${formatStatName(stat)}</div>
-                                <div class="d-flex justify-content-around mt-3">
-                                    <div>
-                                        <div class="player1-value">${statData.player1_value}</div>
-                                        <small class="text-muted">${response.player1}</small>
-                                        ${p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
-                                    </div>
-                                    <div>
-                                        <div class="player2-value">${statData.player2_value}</div>
-                                        <small class="text-muted">${response.player2}</small>
-                                        ${!p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }
-            });
-            
-            keyStatsHtml += '</div>';
-            
-            // Create detailed comparison
-            let detailsHtml = `
-                <div class="card shadow-sm">
-                    <div class="card-header bg-primary text-white">
-                        <h5 class="mb-0">Detailed Statistics - ${response.year}</h5>
-                    </div>
-                    <div class="card-body">
-            `;
-            
-            statsData.forEach(stat => {
-                const p1Val = stat.player1_value;
-                const p2Val = stat.player2_value;
-                let p1Better = false;
-                
-                // Special handling for W-L record
-                if (stat.stat !== 'W-L') {
-                    p1Better = isBetterValue(stat.stat, parseFloat(p1Val) || 0, parseFloat(p2Val) || 0);
-                }
-                
-                detailsHtml += `
-                    <div class="stat-comparison">
-                        <div style="width: 30%">
-                            <span class="stat-label">${formatStatName(stat.stat)}</span>
-                        </div>
-                        <div style="width: 25%; text-align: right;">
-                            <span class="player-value player1-value">
-                                ${p1Val}
-                                ${p1Better && stat.stat !== 'W-L' ? '<i class="fas fa-caret-up text-success ms-1"></i>' : ''}
-                            </span>
-                        </div>
-                        <div style="width: 20%; text-align: center;">
-                            <div class="progress" style="height: 6px;">
-                                ${stat.stat !== 'W-L' ? `
-                                    <div class="progress-bar bg-primary" style="width: ${p1Better ? '100%' : '0%'}"></div>
-                                ` : ''}
-                            </div>
-                        </div>
-                        <div style="width: 25%; text-align: left;">
-                            <span class="player-value player2-value">
-                                ${p2Val}
-                                ${!p1Better && stat.stat !== 'W-L' ? '<i class="fas fa-caret-up text-success ms-1"></i>' : ''}
-                            </span>
-                        </div>
-                    </div>
+            availableSurfaces.forEach((surface, index) => {
+                surfaceFilterHtml += `
+                    <button type="button" class="btn btn-outline-primary ${index === 0 ? 'active' : ''}" 
+                            data-surface="${surface}">${surface}</button>
                 `;
             });
             
-            detailsHtml += '</div></div>';
+            $('#surfaceFilter .btn-group').html(surfaceFilterHtml);
+            $('#surfaceFilter').show();
             
-            // Add chart for serve stats
-            let chartHtml = `
-                <div class="card shadow-sm mt-4">
-                    <div class="card-header">
-                        <h5 class="mb-0">Serve Performance Comparison</h5>
-                    </div>
-                    <div class="card-body">
-                        <canvas id="serveChart"></canvas>
-                    </div>
-                </div>
-            `;
-            
-            $('#results').html(keyStatsHtml + detailsHtml + chartHtml);
-            
-            // Create chart
-            const serveStats = ['1st_in%', '1st_win%', '2nd_win%', 'ace%'];
-            const p1Data = [];
-            const p2Data = [];
-            const labels = [];
-            
-            serveStats.forEach(stat => {
-                const statData = statsData.find(s => s.stat === stat);
-                if (statData) {
-                    labels.push(formatStatName(stat));
-                    p1Data.push(parseFloat(statData.player1_value) || 0);
-                    p2Data.push(parseFloat(statData.player2_value) || 0);
-                }
-            });
-            
-            new Chart(document.getElementById('serveChart'), {
-                type: 'radar',
-                data: {
-                    labels: labels,
-                    datasets: [{
-                        label: response.player1,
-                        data: p1Data,
-                        borderColor: 'rgb(30, 58, 138)',
-                        backgroundColor: 'rgba(30, 58, 138, 0.1)'
-                    }, {
-                        label: response.player2,
-                        data: p2Data,
-                        borderColor: 'rgb(16, 185, 129)',
-                        backgroundColor: 'rgba(16, 185, 129, 0.1)'
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    scales: {
-                        r: {
-                            beginAtZero: true,
-                            max: 100
-                        }
-                    }
-                }
-            });
+            // Display first available surface (usually 'All')
+            if (availableSurfaces.length > 0) {
+                displayComparison(availableSurfaces[0]);
+            }
         },
         error: function(xhr) {
             $('.loading').hide();

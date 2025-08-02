@@ -11,40 +11,21 @@ from functools import lru_cache
 from datetime import datetime, timedelta
 import pickle
 import os
-from config import BASE_URL, REQUEST_DELAY, REQUEST_RETRIES
+from config import (BASE_URL, REQUEST_DELAY, REQUEST_RETRIES, 
+                   CACHE_EXPIRE_HOURS, DATABASE_PATH)
+from database import TennisDatabase
+
+# Add this constant at the top of the file after imports
+ROUND_SORT_ORDER = {
+    'Q1': 0, 'Q2': 1, 'Q3': 2, 'R128': 3, 'R64': 4, 'ER': 5, 
+    'R32': 6, 'R16': 7, 'RR': 8, 'QF': 9, 'SF': 10, 'BR': 11, 'F': 12
+}
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-class TennisDataCache:
-    """Simple file-based cache for player data"""
-    def __init__(self, cache_dir='cache', expire_hours=24):
-        self.cache_dir = cache_dir
-        self.expire_hours = expire_hours
-        os.makedirs(cache_dir, exist_ok=True)
-    
-    def _get_cache_path(self, player_name):
-        return os.path.join(self.cache_dir, f"{player_name.replace(' ', '_')}.pkl")
-    
-    def get(self, player_name):
-        cache_path = self._get_cache_path(player_name)
-        if os.path.exists(cache_path):
-            mod_time = datetime.fromtimestamp(os.path.getmtime(cache_path))
-            if datetime.now() - mod_time < timedelta(hours=self.expire_hours):
-                try:
-                    with open(cache_path, 'rb') as f:
-                        return pickle.load(f)
-                except:
-                    pass
-        return None
-    
-    def set(self, player_name, data):
-        cache_path = self._get_cache_path(player_name)
-        with open(cache_path, 'wb') as f:
-            pickle.dump(data, f)
-
-# Initialize cache
-cache = TennisDataCache()
+# Initialize database
+db = TennisDatabase(DATABASE_PATH)
 
 class TennisDataScraper:
     def __init__(self):
@@ -72,28 +53,74 @@ class TennisDataScraper:
                 if attempt == retries - 1:
                     raise
     
+    def get_player_list(self):
+        """Get list of all available players for autocomplete"""
+        # Check database cache first
+        cached_list = db.get_cached_player_list()
+        if cached_list:
+            logging.info("Using cached player list")
+            return cached_list
+        
+        # If not in cache, scrape from web
+        players = []
+        try:
+            # Try multiple pages for comprehensive list
+            for page_type in ['men', 'women']:
+                url = f'{BASE_URL}/cgi-bin/player-index-{page_type}.cgi'
+                try:
+                    response = self._make_request(url)
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # Extract player names from links
+                    for link in soup.find_all('a', href=True):
+                        if 'cgi-bin/player' in link['href'] and link.text.strip():
+                            player_name = link.text.strip()
+                            if player_name and player_name not in players:
+                                players.append(player_name)
+                except Exception as e:
+                    logging.warning(f"Could not get {page_type} players: {str(e)}")
+            
+            # Also add players from database
+            db_players = db.get_all_players()
+            for player in db_players:
+                if player not in players:
+                    players.append(player)
+            
+            # Sort and cache
+            players.sort()
+            if players:
+                db.cache_player_list(players)
+                logging.info(f"Cached {len(players)} players")
+            
+        except Exception as e:
+            logging.error(f"Error getting player list: {str(e)}")
+            # Fall back to database players only
+            players = db.get_all_players()
+        
+        return players
+    
     def get_player_matches(self, player_name):
-        """Get all matches for a player with caching"""
-        # Check cache first
-        cached_data = cache.get(player_name)
+        """Get all matches for a player with database caching"""
+        # Check database first
+        cached_data = db.get_player_matches(player_name)
         if cached_data is not None:
-            logging.info(f"Using cached data for {player_name}")
+            logging.info(f"Using database cached data for {player_name}")
             return cached_data
         
-        # If not in cache, fetch from web
+        # If not in database or expired, fetch from web
         data = self._fetch_player_matches(player_name)
         if data is not None:
-            cache.set(player_name, data)
+            db.cache_player_matches(player_name, data)
         return data
     
     def _fetch_player_matches(self, player_name):
         """Fetch player matches from web"""
-        player_name = player_name.replace(' ', '')
+        player_name_url = player_name.replace(' ', '')
         all_matches = []
         
         # Try HTML page first
         try:
-            html_url = f'{BASE_URL}/cgi-bin/player-classic.cgi?p={player_name}'
+            html_url = f'{BASE_URL}/cgi-bin/player-classic.cgi?p={player_name_url}'
             response = self._make_request(html_url)
             
             if "Benoit Paire" not in response.text[:4000]:
@@ -112,8 +139,8 @@ class TennisDataScraper:
         # If no matches found, try JS files
         if not all_matches:
             js_urls = [
-                f"{BASE_URL}/jsmatches/{player_name}.js",
-                f"{BASE_URL}/jsmatches/{player_name}Career.js"
+                f"{BASE_URL}/jsmatches/{player_name_url}.js",
+                f"{BASE_URL}/jsmatches/{player_name_url}Career.js"
             ]
             for url in js_urls:
                 try:
@@ -193,8 +220,8 @@ class TennisDataScraper:
 
 class TennisStatsCalculator:
     @staticmethod
-    def calculate_yearly_stats(df):
-        """Calculate tennis statistics by year"""
+    def calculate_yearly_stats(df, surface=None):
+        """Calculate tennis statistics by year and optionally by surface"""
         if df is None or df.empty:
             return pd.DataFrame()
         
@@ -205,7 +232,13 @@ class TennisStatsCalculator:
         stats_df = df.copy()
         stats_df['year'] = stats_df['date'].dt.year
         
-        # Filter out walkovers and empty scores (additional safety check)
+        # Filter by surface if specified
+        if surface:
+            stats_df = stats_df[stats_df['surf'] == surface]
+            if stats_df.empty:
+                return pd.DataFrame()
+        
+        # Filter out walkovers and empty scores
         stats_df = stats_df[~stats_df['score'].isin(['W/O', '', None])]
         stats_df = stats_df[stats_df['score'].notna()]
         
@@ -249,10 +282,99 @@ class TennisStatsCalculator:
         yearly_stats['avg_opp_rank'] = yearly_sums['orank'].round(1)
         yearly_stats['matches_with_stats%'] = (stats_df.groupby('year').size() / wl_record['total'] * 100).round(1)
         
+        if surface:
+            yearly_stats['surface'] = surface
+        
         yearly_stats = yearly_stats.replace([np.inf, -np.inf], np.nan).fillna(0)
         
         return yearly_stats
-
+    
+    @staticmethod
+    def calculate_surface_breakdown(df):
+        """Calculate statistics broken down by surface"""
+        if df is None or df.empty:
+            return {}
+        
+        surfaces = df['surf'].unique()
+        surface_stats = {}
+        
+        for surface in surfaces:
+            if pd.notna(surface):
+                stats = TennisStatsCalculator.calculate_yearly_stats(df, surface)
+                if not stats.empty:
+                    surface_stats[surface] = stats
+        
+        return surface_stats
+    
+    @staticmethod
+    def calculate_recent_form(df, num_matches=10):  # Changed from 20 to 10
+        """Calculate form over last N matches with proper tournament round sorting"""
+        if df is None or df.empty:
+            return {}
+        
+        # Get last N matches (excluding walkovers)
+        valid_matches = df[~df['score'].isin(['W/O', '', None])]
+        valid_matches = valid_matches[valid_matches['score'].notna()]
+        
+        # Sort by date first, then by tournament and round for same-date matches
+        valid_matches = valid_matches.copy()
+        valid_matches['round_order'] = valid_matches['round'].map(ROUND_SORT_ORDER).fillna(99)
+        
+        # Sort by date (descending), then by tournament name, then by round order (descending)
+        valid_matches = valid_matches.sort_values(
+            ['date', 'tourn', 'round_order'], 
+            ascending=[False, True, False]
+        )
+        
+        recent = valid_matches.head(num_matches)
+        
+        if recent.empty:
+            return {}
+        
+        # Calculate basic stats
+        wins = sum(recent['wl'] == 'W')
+        losses = sum(recent['wl'] == 'L')
+        
+        form_stats = {
+            'last_matches': len(recent),
+            'wins': wins,
+            'losses': losses,
+            'win_pct': round((wins / len(recent) * 100), 1) if len(recent) > 0 else 0,
+            'win_streak': 0,
+            'loss_streak': 0,
+            'form_string': '',
+            'avg_opp_rank': round(pd.to_numeric(recent['orank'], errors='coerce').mean(), 1)
+        }
+        
+        # Calculate current streak and form string
+        for i, (_, match) in enumerate(recent.iterrows()):
+            result = match['wl']
+            form_stats['form_string'] += result
+            
+            if i == 0:  # First match (most recent)
+                if result == 'W':
+                    form_stats['win_streak'] = 1
+                else:
+                    form_stats['loss_streak'] = 1
+            else:
+                if result == form_stats['form_string'][i-1]:
+                    if result == 'W' and form_stats['win_streak'] > 0:
+                        form_stats['win_streak'] += 1
+                    elif result == 'L' and form_stats['loss_streak'] > 0:
+                        form_stats['loss_streak'] += 1
+                else:
+                    break
+        
+        # Surface breakdown
+        surface_breakdown = recent.groupby('surf')['wl'].value_counts().unstack(fill_value=0)
+        form_stats['surface_breakdown'] = surface_breakdown.to_dict('index')
+        
+        # Recent matches details (remove round_order from output)
+        recent_matches = recent[['date', 'tourn', 'surf', 'opp', 'wl', 'score', 'round']].copy()
+        recent_matches['date'] = recent_matches['date'].dt.strftime('%Y-%m-%d')
+        form_stats['matches'] = recent_matches.to_dict('records')
+        
+        return form_stats
     
     @staticmethod
     def calculate_career_stats(df):
@@ -307,7 +429,6 @@ class TennisStatsCalculator:
         }, index=['career'])
         
         return career_stats.replace([np.inf, -np.inf], np.nan).fillna(0)
-
     
     @staticmethod
     def format_h2h_matches(matches_df, player1, player2):
@@ -319,7 +440,11 @@ class TennisStatsCalculator:
         matches_df_clean = matches_df[~matches_df['score'].isin(['W/O', '', None])]
         matches_df_clean = matches_df_clean[matches_df_clean['score'].notna()]
         
-        h2h_matches = matches_df_clean[matches_df_clean['opp'] == player2][
+        # Normalize opponent name for comparison
+        player2_normalized = player2.lower().replace(' ', '').replace('-', '').replace("'", '')
+        matches_df_clean['opp_normalized'] = matches_df_clean['opp'].str.lower().str.replace(' ', '').str.replace('-', '').str.replace("'", '')
+        
+        h2h_matches = matches_df_clean[matches_df_clean['opp_normalized'] == player2_normalized][
             ['date', 'tourn', 'wl', 'surf', 'score', 'round']
         ].copy()
         
@@ -362,8 +487,17 @@ calculator = TennisStatsCalculator()
 def get_player_matches(player_name):
     return scraper.get_player_matches(player_name)
 
-def calculate_yearly_stats(df):
-    return calculator.calculate_yearly_stats(df)
+def get_player_list():
+    return scraper.get_player_list()
+
+def calculate_yearly_stats(df, surface=None):
+    return calculator.calculate_yearly_stats(df, surface)
+
+def calculate_surface_breakdown(df):
+    return calculator.calculate_surface_breakdown(df)
+
+def calculate_recent_form(df, num_matches=20):
+    return calculator.calculate_recent_form(df, num_matches)
 
 def calculate_career_stats(df):
     return calculator.calculate_career_stats(df)
@@ -371,10 +505,10 @@ def calculate_career_stats(df):
 def format_h2h_matches(matches_df, player1, player2):
     return calculator.format_h2h_matches(matches_df, player1, player2)
 
-def compare(p1, p2, year=2025):
+def compare(p1, p2, year=2025, surface=None):
     try:
-        p1_data = calculate_yearly_stats(get_player_matches(p1)).loc[year]
-        p2_data = calculate_yearly_stats(get_player_matches(p2)).loc[year]
+        p1_data = calculate_yearly_stats(get_player_matches(p1), surface).loc[year]
+        p2_data = calculate_yearly_stats(get_player_matches(p2), surface).loc[year]
         
         result = pd.concat([
             pd.DataFrame(p1_data).rename(columns={year: p1}),

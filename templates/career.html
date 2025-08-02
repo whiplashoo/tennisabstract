@@ -38,92 +38,170 @@
 <script>
 let careerData = null;
 let currentYear = null;
+let currentSurface = null;
 
-function displayYearStats(year) {
+function displayFormString(formString) {
+    let html = '';
+    // Show all 10 matches
+    for (let i = 0; i < formString.length && i < 10; i++) {
+        const result = formString[i];
+        html += `<span class="form-badge form-badge-${result === 'W' ? 'win' : 'loss'}">${result}</span>`;
+    }
+    return html;
+}
+
+function displayRecentMatches(matches) {
+    let html = '<div class="mt-3">';
+    matches.slice(0, 5).forEach(match => {
+        const isWin = match.wl === 'W';
+        html += `
+            <div class="recent-match-card recent-match-${isWin ? 'win' : 'loss'}">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                        <small class="text-muted">${match.date}</small>
+                        <span class="ms-2">${match.tourn}</span>
+                        <span class="badge bg-secondary ms-1">${match.round}</span>
+                    </div>
+                    <div class="text-end">
+                        <span class="badge surface-${match.surf.toLowerCase()}">${match.surf}</span>
+                        <span class="ms-2">${isWin ? 'def.' : 'lost to'} ${match.opp}</span>
+                        <strong class="ms-2">${match.score}</strong>
+                    </div>
+                </div>
+            </div>
+        `;
+    });
+    html += '</div>';
+    return html;
+}
+
+function displayYearStats(year, surface = null) {
     currentYear = year;
     
-    // Update active button
+    // Update active year button
     $('.year-btn').removeClass('active');
     $(`.year-btn[data-year="${year}"]`).addClass('active');
     
-    // Find year data
-    const yearData = year === 'career' ? careerData.career_summary : 
-                     careerData.yearly_stats.find(y => y.year == year);
+    let displayData;
     
-    if (!yearData) return;
+    if (surface && surface !== 'All') {
+        // Display surface-specific stats for the year
+        if (!careerData.surface_breakdown[surface]) {
+            $('#yearStats').html(`
+                <div class="alert alert-warning">
+                    No ${surface} court data available ${year === 'career' ? '' : 'for ' + year}.
+                </div>
+            `);
+            return;
+        }
+        
+        if (year === 'career') {
+            displayData = careerData.surface_breakdown[surface].career;
+        } else {
+            displayData = careerData.surface_breakdown[surface].yearly[year];
+            if (!displayData) {
+                $('#yearStats').html(`
+                    <div class="alert alert-warning">
+                        No ${surface} court data available for ${year}.
+                    </div>
+                `);
+                return;
+            }
+        }
+    } else {
+        // Display all-surface stats
+        displayData = year === 'career' ? careerData.career_summary : 
+                     careerData.yearly_stats.find(y => y.year == year);
+    }
+    
+    if (!displayData) return;
+    
+    // Add surface indicator if filtered
+    let surfaceIndicator = '';
+    if (surface && surface !== 'All') {
+        surfaceIndicator = `<div class="alert alert-info mb-3">
+            <i class="fas fa-filter"></i> Showing ${surface} court statistics ${year === 'career' ? '(Career)' : 'for ' + year}
+        </div>`;
+    }
     
     // Create stats display
-    let statsHtml = `
+    let statsHtml = surfaceIndicator + `
         <div class="row mb-4">
             <div class="col-md-3">
                 <div class="stat-card text-center">
                     <div class="stat-label">Win-Loss Record</div>
-                    <div class="stat-value">${yearData['W-L']}</div>
-                    <div class="text-muted">${yearData['win%']}% Win Rate</div>
+                    <div class="stat-value">${displayData['W-L']}</div>
+                    <div class="text-muted">${displayData['win%']}% Win Rate</div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="stat-card text-center">
-                    <div class="stat-label">Service Hold %</div>
-                    <div class="stat-value">${yearData['hold%']}%</div>
+                    <div class="stat-label">1st Serve %</div>
+                    <div class="stat-value">${displayData['1st_in%']}%</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stat-card text-center">
+                    <div class="stat-label">1st Serve Win %</div>
+                    <div class="stat-value">${displayData['1st_win%']}%</div>
                 </div>
             </div>
             <div class="col-md-3">
                 <div class="stat-card text-center">
                     <div class="stat-label">Break %</div>
-                    <div class="stat-value">${yearData['break%']}%</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="stat-card text-center">
-                    <div class="stat-label">Ace %</div>
-                    <div class="stat-value">${yearData['ace%']}%</div>
+                    <div class="stat-value">${displayData['break%']}%</div>
                 </div>
             </div>
         </div>
         
         <div class="card shadow-sm">
             <div class="card-header">
-                <h5 class="mb-0">Detailed Statistics ${year === 'career' ? '(Career)' : year}</h5>
+                <h5 class="mb-1">Detailed Statistics ${year === 'career' ? '(Career)' : year}</h5>
             </div>
             <div class="card-body">
                 <div class="row">
                     <div class="col-md-6">
-                        <h6 class="text-primary mb-3">Serving Statistics</h6>
                         <div class="stat-comparison">
-                            <span>1st Serve In %</span>
-                            <span class="player-value">${yearData['1st_in%']}%</span>
+                            <span>1st Serve %</span>
+                            <span class="player-value">${displayData['1st_in%']}%</span>
                         </div>
                         <div class="stat-comparison">
                             <span>1st Serve Win %</span>
-                            <span class="player-value">${yearData['1st_win%']}%</span>
+                            <span class="player-value">${displayData['1st_win%']}%</span>
                         </div>
                         <div class="stat-comparison">
                             <span>2nd Serve Win %</span>
-                            <span class="player-value">${yearData['2nd_win%']}%</span>
+                            <span class="player-value">${displayData['2nd_win%']}%</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>Ace %</span>
+                            <span class="player-value">${displayData['ace%']}%</span>
                         </div>
                         <div class="stat-comparison">
                             <span>Double Fault %</span>
-                            <span class="player-value">${yearData['df%']}%</span>
+                            <span class="player-value">${displayData['df%']}%</span>
                         </div>
                     </div>
                     <div class="col-md-6">
-                        <h6 class="text-success mb-3">Break Point Statistics</h6>
                         <div class="stat-comparison">
                             <span>Break Points Saved %</span>
-                            <span class="player-value">${yearData['bp_saved%']}%</span>
+                            <span class="player-value">${displayData['bp_saved%']}%</span>
                         </div>
                         <div class="stat-comparison">
                             <span>Service Hold %</span>
-                            <span class="player-value">${yearData['hold%']}%</span>
+                            <span class="player-value">${displayData['hold%']}%</span>
                         </div>
                         <div class="stat-comparison">
                             <span>Break %</span>
-                            <span class="player-value">${yearData['break%']}%</span>
+                            <span class="player-value">${displayData['break%']}%</span>
                         </div>
                         <div class="stat-comparison">
                             <span>Avg Opponent Rank</span>
-                            <span class="player-value">${yearData['avg_opp_rank']}</span>
+                            <span class="player-value">${displayData['avg_opp_rank']}</span>
+                        </div>
+                        <div class="stat-comparison">
+                            <span>Matches with Stats</span>
+                            <span class="player-value">${displayData['matches_with_stats%']}%</span>
                         </div>
                     </div>
                 </div>
@@ -133,6 +211,16 @@ function displayYearStats(year) {
     
     $('#yearStats').html(statsHtml);
 }
+
+// Surface filter handler
+$(document).on('click', '#surfaceFilter button', function() {
+    $('#surfaceFilter button').removeClass('active');
+    $(this).addClass('active');
+    currentSurface = $(this).data('surface');
+    
+    // Redisplay current year with new surface filter
+    displayYearStats(currentYear, currentSurface);
+});
 
 $('#careerForm').on('submit', function(e) {
     e.preventDefault();
@@ -148,71 +236,197 @@ $('#careerForm').on('submit', function(e) {
         success: function(response) {
             $('.loading').hide();
             careerData = response;
+            currentYear = 'career';
+            currentSurface = 'All';
             
-            // Create year navigation
-            let yearNavHtml = '<div class="year-nav">';
-            yearNavHtml += '<button class="year-btn" data-year="career" onclick="displayYearStats(\'career\')">Career</button>';
-            
-            response.yearly_stats.forEach(yearStat => {
-                yearNavHtml += `<button class="year-btn" data-year="${yearStat.year}" onclick="displayYearStats(${yearStat.year})">${yearStat.year}</button>`;
-            });
-            yearNavHtml += '</div>';
-            
-            // Create container for stats
-            let containerHtml = `
-                <div class="hero-section text-center">
-                    <h3>${response.player}</h3>
-                    <p class="mb-0">Career Overview & Year-by-Year Statistics</p>
-                </div>
-                ${yearNavHtml}
-                <div id="yearStats"></div>
-                
-                <div class="card shadow-sm mt-4">
-                    <div class="card-header">
-                        <h5 class="mb-0">Career Progression Chart</h5>
-                    </div>
-                    <div class="card-body">
-                        <canvas id="progressionChart" height="100"></canvas>
+            // Create hero section with recent form
+            let heroHtml = `
+                <div class="hero-section mb-4">
+                    <div class="container">
+                        <div class="row align-items-center">
+                            <div class="col-md-8">
+                                <h3 class="display-5">${response.player}</h3>
+                                <div class="row mt-4">
+                                    <div class="col-md-4">
+                                        <div class="stat-label">Career Record</div>
+                                        <div class="stat-value">${response.career_summary['W-L']}</div>
+                                        <p class="mb-0">${response.career_summary['win%']}% Win Rate</p>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="stat-label">Average Opponent Rank</div>
+                                        <div class="stat-value">${response.career_summary['avg_opp_rank']}</div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="stat-label">Years on Tour</div>
+                                        <div class="stat-value">${response.yearly_stats.length}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4">
+                                <div class="card bg-white bg-opacity-10 border-0">
+                                    <div class="card-body">
+                                        <h5 class="text-white mb-3">Recent Form</h5>
+                                        <div class="mb-3">
+                                            ${displayFormString(response.recent_form.form_string)}
+                                        </div>
+                                        <p class="mb-2">
+                                            Last ${response.recent_form.last_matches}: 
+                                            <strong>${response.recent_form.wins}-${response.recent_form.losses}</strong>
+                                            (${response.recent_form.win_pct}%)
+                                        </p>
+                                        ${response.recent_form.win_streak > 1 ? 
+                                            `<p class="mb-0 streak-text streak-win"><i class="fas fa-fire"></i> ${response.recent_form.win_streak} match win streak</p>` :
+                                            response.recent_form.loss_streak > 1 ?
+                                            `<p class="mb-0 streak-text streak-loss"><i class="fas fa-arrow-down"></i> ${response.recent_form.loss_streak} match losing streak</p>` : ''}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             `;
             
-            $('#results').html(containerHtml);
+            // Create navigation section with year and surface filters
+            let navHtml = '<div class="mb-4">';
+            
+            // Year navigation
+            navHtml += '<div class="d-flex justify-content-between align-items-center mb-3">';
+            navHtml += '<div class="year-nav">';
+            navHtml += '<button class="year-btn active" data-year="career" onclick="displayYearStats(\'career\', currentSurface)">Career</button>';
+            
+            // Sort years in descending order
+            const sortedYears = response.yearly_stats
+                .map(y => y.year)
+                .sort((a, b) => b - a);
+            
+            sortedYears.forEach(year => {
+                navHtml += `<button class="year-btn" data-year="${year}" onclick="displayYearStats(${year}, currentSurface)">${year}</button>`;
+            });
+            
+            navHtml += '</div></div>';
+            
+            // Surface filter
+            navHtml += `
+                <div id="surfaceFilter">
+                    <div class="btn-group" role="group">
+                        <button type="button" class="btn btn-outline-primary active" data-surface="All">All Surfaces</button>
+            `;
+            
+            // Add surface buttons for surfaces with data
+            const availableSurfaces = Object.keys(response.surface_breakdown || {});
+            availableSurfaces.forEach(surface => {
+                navHtml += `<button type="button" class="btn btn-outline-primary" data-surface="${surface}">${surface}</button>`;
+            });
+            
+            navHtml += '</div></div></div>';
+            
+            // Stats container
+            let statsContainer = '<div id="yearStats"></div>';
+            
+            // Recent matches section
+            let recentMatchesHtml = '';
+            if (response.recent_form.matches && response.recent_form.matches.length > 0) {
+                recentMatchesHtml = `
+                    <div class="card shadow-sm mt-4">
+                        <div class="card-header">
+                            <h5 class="mb-0">Recent Matches</h5>
+                        </div>
+                        <div class="card-body">
+                            ${displayRecentMatches(response.recent_form.matches)}
+                        </div>
+                    </div>
+                `;
+            }
+            
+            // Chart for yearly progression
+            let chartHtml = `
+                <div class="card shadow-sm mt-4">
+                    <div class="card-header">
+                        <h5 class="mb-0">Performance Trend</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="chart-container">
+                            <canvas id="trendChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            $('#results').html(heroHtml + navHtml + statsContainer + recentMatchesHtml + chartHtml);
             
             // Display career stats by default
-            displayYearStats('career');
+            displayYearStats('career', 'All');
             
-            // Create progression chart
-            const years = response.yearly_stats.map(y => y.year);
-            const winPercentages = response.yearly_stats.map(y => y['win%']);
-            const holdPercentages = response.yearly_stats.map(y => y['hold%']);
+            // Create trend chart
+            const years = response.yearly_stats.map(y => y.year).sort();
+            const winPcts = years.map(year => {
+                const yearData = response.yearly_stats.find(y => y.year == year);
+                return yearData ? yearData['win%'] : 0;
+            });
+            const acePcts = years.map(year => {
+                const yearData = response.yearly_stats.find(y => y.year == year);
+                return yearData ? yearData['ace%'] : 0;
+            });
+            const breakPcts = years.map(year => {
+                const yearData = response.yearly_stats.find(y => y.year == year);
+                return yearData ? yearData['break%'] : 0;
+            });
             
-            new Chart(document.getElementById('progressionChart'), {
+            new Chart(document.getElementById('trendChart'), {
                 type: 'line',
                 data: {
                     labels: years,
                     datasets: [{
                         label: 'Win %',
-                        data: winPercentages,
+                        data: winPcts,
                         borderColor: 'rgb(30, 58, 138)',
                         backgroundColor: 'rgba(30, 58, 138, 0.1)',
-                        tension: 0.3
+                        yAxisID: 'y'
                     }, {
-                        label: 'Hold %',
-                        data: holdPercentages,
+                        label: 'Ace %',
+                        data: acePcts,
+                        borderColor: 'rgb(239, 68, 68)',
+                        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                        yAxisID: 'y1'
+                    }, {
+                        label: 'Break %',
+                        data: breakPcts,
                         borderColor: 'rgb(16, 185, 129)',
                         backgroundColor: 'rgba(16, 185, 129, 0.1)',
-                        tension: 0.3
+                        yAxisID: 'y1'
                     }]
                 },
                 options: {
                     responsive: true,
                     maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false,
+                    },
                     scales: {
                         y: {
-                            beginAtZero: false,
-                            min: 40,
+                            type: 'linear',
+                            display: true,
+                            position: 'left',
+                            title: {
+                                display: true,
+                                text: 'Win %'
+                            },
+                            min: 0,
                             max: 100
+                        },
+                        y1: {
+                            type: 'linear',
+                            display: true,
+                            position: 'right',
+                            title: {
+                                display: true,
+                                text: 'Ace % / Break %'
+                            },
+                            grid: {
+                                drawOnChartArea: false,
+                            },
+                            min: 0
                         }
                     }
                 }
