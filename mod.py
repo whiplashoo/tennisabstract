@@ -52,53 +52,7 @@ class TennisDataScraper:
                 logging.error(f"Attempt {attempt + 1} failed for {url}: {str(e)}")
                 if attempt == retries - 1:
                     raise
-    
-    def get_player_list(self):
-        """Get list of all available players for autocomplete"""
-        # Check database cache first
-        cached_list = db.get_cached_player_list()
-        if cached_list:
-            logging.info("Using cached player list")
-            return cached_list
-        
-        # If not in cache, scrape from web
-        players = []
-        try:
-            # Try multiple pages for comprehensive list
-            for page_type in ['men', 'women']:
-                url = f'{BASE_URL}/cgi-bin/player-index-{page_type}.cgi'
-                try:
-                    response = self._make_request(url)
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    
-                    # Extract player names from links
-                    for link in soup.find_all('a', href=True):
-                        if 'cgi-bin/player' in link['href'] and link.text.strip():
-                            player_name = link.text.strip()
-                            if player_name and player_name not in players:
-                                players.append(player_name)
-                except Exception as e:
-                    logging.warning(f"Could not get {page_type} players: {str(e)}")
-            
-            # Also add players from database
-            db_players = db.get_all_players()
-            for player in db_players:
-                if player not in players:
-                    players.append(player)
-            
-            # Sort and cache
-            players.sort()
-            if players:
-                db.cache_player_list(players)
-                logging.info(f"Cached {len(players)} players")
-            
-        except Exception as e:
-            logging.error(f"Error getting player list: {str(e)}")
-            # Fall back to database players only
-            players = db.get_all_players()
-        
-        return players
-    
+
     def get_player_matches(self, player_name):
         """Get all matches for a player with database caching"""
         # Check database first
@@ -486,9 +440,6 @@ calculator = TennisStatsCalculator()
 # Convenience functions for backward compatibility
 def get_player_matches(player_name):
     return scraper.get_player_matches(player_name)
-
-def get_player_list():
-    return scraper.get_player_list()
 
 def calculate_yearly_stats(df, surface=None):
     return calculator.calculate_yearly_stats(df, surface)

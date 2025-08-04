@@ -2,13 +2,10 @@ from flask import Flask, render_template, request, jsonify
 import pandas as pd
 from mod import (
     get_player_matches, 
-    get_player_list,
     calculate_yearly_stats,
     calculate_career_stats, 
-    calculate_surface_breakdown,
     calculate_recent_form,
     format_h2h_matches,
-    compare,
     career
 )
 import json
@@ -25,15 +22,6 @@ def dataframe_to_dict(df):
 @app.route('/')
 def index():
     return render_template('index.html')
-
-@app.route('/api/players')
-def api_get_players():
-    """API endpoint for player autocomplete"""
-    try:
-        players = get_player_list()
-        return jsonify({'players': players})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/compare', methods=['GET', 'POST'])
 def compare_players():
@@ -211,4 +199,4 @@ def career_stats():
     return render_template('career.html')
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    app.run(debug=True, host='0.0.0.0', port=5002)
