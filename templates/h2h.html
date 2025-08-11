@@ -44,7 +44,7 @@ function getSurfaceClass(surface) {
     return surfaceMap[surface] || 'surface-hard';
 }
 
-let h2hProgressChart = null, h2hSurfacesChart = null;
+let h2hProgressChart = null, h2hSurfacesChart = null, h2hRoundsChart = null;
 
 $('#h2hForm').on('submit', function(e) {
     e.preventDefault();
@@ -83,63 +83,32 @@ $('#h2hForm').on('submit', function(e) {
                 </div>
             `;
 
-            // Surface breakdown tiles (if provided)
-            if (response.summary.surface_breakdown) {
-                summaryHtml += '<div class="row mb-4">';
-                for (const [surface, data] of Object.entries(response.summary.surface_breakdown)) {
-                    summaryHtml += `
-                        <div class="col-md-4">
-                            <div class="stat-card">
-                                <div class="stat-label">${surface} Court</div>
-                                <div class="d-flex justify-content-between mt-2">
-                                    <div>
-                                        <span class="player1-value">${data[p1] || 0}</span>
-                                        <small class="text-muted d-block">${p1}</small>
-                                    </div>
-                                    <div class="text-muted align-self-center">-</div>
-                                    <div class="text-end">
-                                        <span class="player2-value">${data[p2] || 0}</span>
-                                        <small class="text-muted d-block">${p2}</small>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    `;
-                }
-                summaryHtml += '</div>';
-            }
-
             // Charts section
             let chartsHtml = `
-                <div class="row g-3">
-                    <div class="col-md-6">
+                <div class="row g-3 mb-4">
+                    <div class="col-md-4">
                         <div class="card shadow-sm">
-                            <div class="card-header"><h5 class="mb-0">Cumulative Wins Over Time</h5></div>
-                            <div class="card-body">
-                                <div class="chart-container" style="height: 320px;"><canvas id="h2hProgress"></canvas></div>
-                            </div>
+                            <div class="card-header"><h6 class="mb-0">Cumulative Wins</h6></div>
+                            <div class="card-body"><div class="chart-container" style="height: 280px;"><canvas id="h2hProgress"></canvas></div></div>
                         </div>
                     </div>
-                    <div class="col-md-6">
+                    <div class="col-md-4">
                         <div class="card shadow-sm">
-                            <div class="card-header"><h5 class="mb-0">Wins by Surface</h5></div>
-                            <div class="card-body">
-                                <div class="chart-container" style="height: 320px;"><canvas id="h2hSurfaces"></canvas></div>
-                            </div>
+                            <div class="card-header"><h6 class="mb-0">Wins by Surface</h6></div>
+                            <div class="card-body"><div class="chart-container" style="height: 280px;"><canvas id="h2hSurfaces"></canvas></div></div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card shadow-sm">
+                            <div class="card-header"><h6 class="mb-0">Wins by Round</h6></div>
+                            <div class="card-body"><div class="chart-container" style="height: 280px;"><canvas id="h2hRounds"></canvas></div></div>
                         </div>
                     </div>
                 </div>
             `;
 
             // Matches list
-            let matchesHtml = `
-                <div class="card shadow-sm mt-4">
-                    <div class="card-header">
-                        <h5 class="mb-0">Match History</h5>
-                    </div>
-                    <div class="card-body">
-            `;
-
+            let matchesHtml = `<div class="card shadow-sm"><div class="card-header"><h5 class="mb-0">Match History</h5></div><div class="card-body">`;
             response.matches.forEach((match) => {
                 const isP1Winner = match.winner_name === p1;
                 matchesHtml += `
@@ -147,26 +116,18 @@ $('#h2hForm').on('submit', function(e) {
                         <div class="row align-items-center">
                             <div class="col-md-2">
                                 <small class="text-muted">${match.match_date}</small>
-                                <div class="mt-1">
-                                    <span class="badge ${getSurfaceClass(match.surface)}">${match.surface}</span>
-                                </div>
+                                <div class="mt-1"><span class="${getSurfaceClass(match.surface)}">${match.surface}</span></div>
                             </div>
                             <div class="col-md-3">
                                 <strong>${match.tournament}</strong>
                                 <div><small class="text-muted">${match.round}</small></div>
                             </div>
                             <div class="col-md-4 text-center">
-                                <div class="${isP1Winner ? 'player1-value' : 'text-muted'}">
-                                    ${p1} ${isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
-                                </div>
+                                <div class="${isP1Winner ? 'player1-value' : 'text-muted'}">${p1} ${isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}</div>
                                 <div class="my-1"><strong>${match.score}</strong></div>
-                                <div class="${!isP1Winner ? 'player2-value' : 'text-muted'}">
-                                    ${p2} ${!isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
-                                </div>
+                                <div class="${!isP1Winner ? 'player2-value' : 'text-muted'}">${p2} ${!isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}</div>
                             </div>
-                            <div class="col-md-3 text-end">
-                                <span class="badge bg-secondary">${match.h2h}</span>
-                            </div>
+                            <div class="col-md-3 text-end"><span class="badge bg-secondary">${match.h2h}</span></div>
                         </div>
                     </div>
                 `;
@@ -185,45 +146,40 @@ $('#h2hForm').on('submit', function(e) {
                 s1.push(w1); s2.push(w2);
             });
 
-            // Destroy old charts if exist
-            [h2hProgressChart, h2hSurfacesChart].forEach(ch => { if (ch && ch.destroy) ch.destroy(); });
+            // Calculate wins by round
+            const roundOrder = ['F', 'SF', 'QF', 'R16', 'R32', 'R64', 'R128', 'RR'];
+            const roundLabels = {'F': 'Final', 'SF': 'Semi-Final', 'QF': 'Quarter-Final', 'R16': 'Round of 16', 'R32': 'Round of 32', 'R64': 'Round of 64', 'R128': 'Round of 128', 'RR': 'Round Robin'};
+            const roundStats = {};
+            response.matches.forEach(match => {
+                const round = match.round || 'Other';
+                if (!roundStats[round]) roundStats[round] = { [p1]: 0, [p2]: 0 };
+                if (match.winner_name === p1) roundStats[round][p1]++;
+                else if (match.winner_name === p2) roundStats[round][p2]++;
+            });
+            const sortedRounds = Object.keys(roundStats).sort((a, b) => {
+                const aIndex = roundOrder.indexOf(a), bIndex = roundOrder.indexOf(b);
+                if (aIndex === -1 && bIndex === -1) return 0;
+                if (aIndex === -1) return 1;
+                if (bIndex === -1) return -1;
+                return aIndex - bIndex;
+            });
+            const roundLabelsArray = sortedRounds.map(r => roundLabels[r] || r);
+            const p1RoundWins = sortedRounds.map(r => roundStats[r][p1] || 0);
+            const p2RoundWins = sortedRounds.map(r => roundStats[r][p2] || 0);
 
-            // Line chart
-            {
-                const ctx = document.getElementById('h2hProgress').getContext('2d');
-                h2hProgressChart = new Chart(ctx, {
-                    type: 'line',
-                    data: {
-                        labels,
-                        datasets: [
-                            { label: p1, data: s1, borderColor: 'rgb(30,58,138)', backgroundColor: 'rgba(30,58,138,.1)', tension: .25 },
-                            { label: p2, data: s2, borderColor: 'rgb(239,68,68)', backgroundColor: 'rgba(239,68,68,.1)', tension: .25 }
-                        ]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false } }
-                });
-            }
+            // Destroy old charts
+            [h2hProgressChart, h2hSurfacesChart, h2hRoundsChart].forEach(ch => { if (ch && ch.destroy) ch.destroy(); });
 
-            // Wins by surface bar
-            {
-                const surfaces = ['Hard','Clay','Grass','Carpet'];
-                const b = response.summary.surface_breakdown || {};
-                const p1Arr = surfaces.map(s => (b[s] && b[s][p1]) ? b[s][p1] : 0);
-                const p2Arr = surfaces.map(s => (b[s] && b[s][p2]) ? b[s][p2] : 0);
-
-                const ctx = document.getElementById('h2hSurfaces').getContext('2d');
-                h2hSurfacesChart = new Chart(ctx, {
-                    type: 'bar',
-                    data: {
-                        labels: surfaces,
-                        datasets: [
-                            { label: p1, data: p1Arr, backgroundColor: 'rgba(30,58,138,.8)' },
-                            { label: p2, data: p2Arr, backgroundColor: 'rgba(16,185,129,.8)' }
-                        ]
-                    },
-                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, precision: 0 } } }
-                });
-            }
+            // Cumulative wins chart
+            h2hProgressChart = new Chart(document.getElementById('h2hProgress').getContext('2d'), { type: 'line', data: { labels, datasets: [{ label: p1, data: s1, borderColor: 'rgb(30,58,138)', backgroundColor: 'rgba(30,58,138,.1)', tension: .25 }, { label: p2, data: s2, borderColor: 'rgb(239,68,68)', backgroundColor: 'rgba(239,68,68,.1)', tension: .25 }] }, options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10 } } }, scales: { x: { display: false }, y: { beginAtZero: true, ticks: { precision: 0 } } } } });
+            
+            // Wins by surface chart
+            const surfaces = ['Hard','Clay','Grass','Carpet'];
+            const b = response.summary.surface_breakdown || {};
+            h2hSurfacesChart = new Chart(document.getElementById('h2hSurfaces').getContext('2d'), { type: 'bar', data: { labels: surfaces, datasets: [{ label: p1, data: surfaces.map(s => (b[s] && b[s][p1]) ? b[s][p1] : 0), backgroundColor: 'rgba(30,58,138,.8)' }, { label: p2, data: surfaces.map(s => (b[s] && b[s][p2]) ? b[s][p2] : 0), backgroundColor: 'rgba(16,185,129,.8)' }] }, options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10 } } } } });
+            
+            // Wins by round chart
+            h2hRoundsChart = new Chart(document.getElementById('h2hRounds').getContext('2d'), { type: 'bar', data: { labels: roundLabelsArray, datasets: [{ label: p1, data: p1RoundWins, backgroundColor: 'rgba(30,58,138,.8)' }, { label: p2, data: p2RoundWins, backgroundColor: 'rgba(245,158,11,.8)' }] }, options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y', scales: { x: { beginAtZero: true, ticks: { stepSize: 1, precision: 0 } } }, plugins: { legend: { position: 'bottom', labels: { boxWidth: 12, padding: 10 } } } } });
         },
         error: function(xhr) {
             $('.loading').hide();

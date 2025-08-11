@@ -55,7 +55,7 @@
 <script>
 let allSurfacesData = null;
 let currentSurface = 'All';
-let serveChart = null, holdBreakChart = null, tbBarChart = null, topnChart = null;
+let performanceChart = null;
 
 // Helper: better stat direction
 function isBetterValue(stat, val1, val2) {
@@ -104,6 +104,8 @@ function getStat(statsData, key) {
     return {
         p1: parseFloat(row.player1_value) || 0,
         p2: parseFloat(row.player2_value) || 0,
+        p1_raw: row.player1_value,
+        p2_raw: row.player2_value,
         names: { p1: row.player1_name, p2: row.player2_name }
     };
 }
@@ -129,224 +131,241 @@ function displayComparison(surface) {
         </div>`;
     }
 
-    // Key stats row
-    let keyStatsHtml = '<div class="row mb-4">';
-    const keyStats = ['win%', 'ace%', 'hold%', 'break%'];
-    keyStats.forEach(stat => {
-        const row = statsData.find(s => s.stat === stat);
-        if (row) {
-            const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
-            keyStatsHtml += `
-                <div class="col-sm-6 col-md-3">
-                    <div class="stat-card text-center">
-                        <div class="stat-label">${formatStatName(stat)}</div>
-                        <div class="d-flex justify-content-around mt-3">
-                            <div>
-                                <div class="player1-value">${row.player1_value}</div>
-                                <small class="text-muted">${player1}</small>
-                                ${p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
-                            </div>
-                            <div>
-                                <div class="player2-value">${row.player2_value}</div>
-                                <small class="text-muted">${player2}</small>
-                                ${!p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
-                            </div>
-                        </div>
+    // Overview cards with W-L and win%
+    const wlStat = getStat(statsData, 'W-L');
+    const winPctStat = getStat(statsData, 'win%');
+    
+    let overviewHtml = `
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="stat-card">
+                    <h5 class="text-primary mb-3">${player1}</h5>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="stat-label">Record</span>
+                        <span class="stat-value">${wlStat.p1_raw || 'N/A'}</span>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <span class="stat-label">Win %</span>
+                        <span class="stat-value">${winPctStat.p1_raw || 'N/A'}%</span>
                     </div>
                 </div>
-            `;
-        }
-    });
-    keyStatsHtml += '</div>';
-
-    // Detailed stats list
-    let detailsHtml = `
-        <div class="card shadow-sm">
-            <div class="card-header bg-primary text-white">
-                <h5 class="mb-0">Detailed Statistics</h5>
             </div>
-            <div class="card-body">
-    `;
-    statsData.forEach(stat => {
-        const p1Val = stat.player1_value;
-        const p2Val = stat.player2_value;
-        let p1Better = false;
-        if (stat.stat !== 'W-L') {
-            p1Better = isBetterValue(stat.stat, p1Val, p2Val);
-        }
-        detailsHtml += `
-            <div class="stat-comparison">
-                <div style="width: 30%">
-                    <span class="stat-label">${formatStatName(stat.stat)}</span>
-                </div>
-                <div style="width: 25%; text-align: right;">
-                    <span class="player-value player1-value">
-                        ${p1Val}
-                        ${p1Better && stat.stat !== 'W-L' ? '<i class="fas fa-caret-up text-success ms-1"></i>' : ''}
-                    </span>
-                </div>
-                <div style="width: 20%; text-align: center;">
-                    <div class="progress" style="height: 6px;">
-                        ${stat.stat !== 'W-L' ? `
-                            <div class="progress-bar bg-primary" style="width: ${p1Better ? '100%' : '0%'}"></div>
-                        ` : ''}
+            <div class="col-md-6">
+                <div class="stat-card">
+                    <h5 class="text-success mb-3">${player2}</h5>
+                    <div class="d-flex justify-content-between mb-2">
+                        <span class="stat-label">Record</span>
+                        <span class="stat-value">${wlStat.p2_raw || 'N/A'}</span>
                     </div>
-                </div>
-                <div style="width: 25%; text-align: left;">
-                    <span class="player-value player2-value">
-                        ${p2Val}
-                        ${!p1Better && stat.stat !== 'W-L' ? '<i class="fas fa-caret-up text-success ms-1"></i>' : ''}
-                    </span>
-                </div>
-            </div>
-        `;
-    });
-    detailsHtml += '</div></div>';
-
-    // Charts: Serve radar; Hold/Break compare; Tiebreak bar; Top-N bar
-    const serveStats = ['1st_in%', '1st_win%', '2nd_win%', 'ace%'];
-    const labels = [];
-    const p1Data = [];
-    const p2Data = [];
-
-    serveStats.forEach(stat => {
-        const row = statsData.find(s => s.stat === stat);
-        if (row) {
-            labels.push(formatStatName(stat));
-            p1Data.push(parseFloat(row.player1_value) || 0);
-            p2Data.push(parseFloat(row.player2_value) || 0);
-        }
-    });
-
-    const hold = getStat(statsData, 'hold%');
-    const brk = getStat(statsData, 'break%');
-    const tb = getStat(statsData, 'tb_win%');
-
-    const t5 = getStat(statsData, 'top5_win%');
-    const t10 = getStat(statsData, 'top10_win%');
-    const t20 = getStat(statsData, 'top20_win%');
-    const t50 = getStat(statsData, 'top50_win%');
-    const t100 = getStat(statsData, 'top100_win%');
-
-    const hasTopN = [t5, t10, t20, t50, t100].some(o => Number.isFinite(o.p1) || Number.isFinite(o.p2));
-
-    let chartHtml = `
-        <div class="row g-3">
-            <div class="col-md-6">
-                <div class="card shadow-sm">
-                    <div class="card-header"><h5 class="mb-0">Serve Performance</h5></div>
-                    <div class="card-body"><div class="chart-container" style="height: 380px;"><canvas id="serveChart"></canvas></div></div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card shadow-sm">
-                    <div class="card-header"><h5 class="mb-0">Hold% and Break%</h5></div>
-                    <div class="card-body"><div class="chart-container" style="height: 380px;"><canvas id="holdBreakChart"></canvas></div></div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card shadow-sm mt-3 mt-md-0">
-                    <div class="card-header"><h5 class="mb-0">Tiebreak Win %</h5></div>
-                    <div class="card-body"><div class="chart-container" style="height: 260px;"><canvas id="tbBarChart"></canvas></div></div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="card shadow-sm mt-3 mt-md-0">
-                    <div class="card-header"><h5 class="mb-0">Win% vs Top-N Opponents</h5></div>
-                    <div class="card-body"><div class="chart-container" style="height: 300px;"><canvas id="topnChart"></canvas></div></div>
+                    <div class="d-flex justify-content-between">
+                        <span class="stat-label">Win %</span>
+                        <span class="stat-value">${winPctStat.p2_raw || 'N/A'}%</span>
+                    </div>
                 </div>
             </div>
         </div>
     `;
 
-    $('#results').html(surfaceIndicator + keyStatsHtml + detailsHtml + chartHtml);
+    // Detailed stats in three columns
+    let detailsHtml = `
+        <div class="row mb-4">
+            <!-- Serve Stats -->
+            <div class="col-md-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-primary text-white">
+                        <h6 class="mb-0"><i class="fas fa-table-tennis"></i> Serve Statistics</h6>
+                    </div>
+                    <div class="card-body">
+    `;
+    
+    const serveStats = ['1st_in%', '1st_win%', '2nd_win%', 'ace%', 'df%'];
+    serveStats.forEach(stat => {
+        const row = statsData.find(s => s.stat === stat);
+        if (row) {
+            const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
+            detailsHtml += `
+                <div class="stat-comparison-row">
+                    <div class="stat-name">${formatStatName(stat)}</div>
+                    <div class="stat-values">
+                        <span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}</span>
+                        <span class="vs-separator">vs</span>
+                        <span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}</span>
+                    </div>
+                </div>
+            `;
+        }
+    });
+    
+    detailsHtml += `
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Games Stats -->
+            <div class="col-md-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-success text-white">
+                        <h6 class="mb-0"><i class="fas fa-gamepad"></i> Games Statistics</h6>
+                    </div>
+                    <div class="card-body">
+    `;
+    
+    // In the Games Stats section, replace the tiebreak line with:
+    const gameStats = ['hold%', 'bp_saved%', 'break%', 'tb_win%'];
+    gameStats.forEach(stat => {
+        const row = statsData.find(s => s.stat === stat);
+        if (row) {
+            const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
+            
+            // Special handling for tiebreak to show both W-L and %
+            if (stat === 'tb_win%') {
+                const tbWL = statsData.find(s => s.stat === 'tb_W-L');
+                const p1Display = tbWL && tbWL.player1_value ? 
+                    `${tbWL.player1_value} (${row.player1_value || 'N/A'})` : 
+                    row.player1_value || 'N/A';
+                const p2Display = tbWL && tbWL.player2_value ? 
+                    `${tbWL.player2_value} (${row.player2_value || 'N/A'})` : 
+                    row.player2_value || 'N/A';
+                
+                detailsHtml += `
+                    <div class="stat-comparison-row">
+                        <div class="stat-name">Tiebreak</div>
+                        <div class="stat-values">
+                            <span class="player1-value ${p1Better ? 'better' : ''}">${p1Display}</span>
+                            <span class="vs-separator">vs</span>
+                            <span class="player2-value ${!p1Better ? 'better' : ''}">${p2Display}</span>
+                        </div>
+                    </div>
+                `;
+            } else {
+                detailsHtml += `
+                    <div class="stat-comparison-row">
+                        <div class="stat-name">${stat === 'hold%' ? 'Hold %' : 
+                                            stat === 'bp_saved%' ? 'Break Points Saved %' :
+                                            'Break %'}</div>
+                        <div class="stat-values">
+                            <span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}</span>
+                            <span class="vs-separator">vs</span>
+                            <span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}</span>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+    });
 
-    // Destroy existing charts
-    [serveChart, holdBreakChart, tbBarChart, topnChart].forEach(ch => { if (ch && ch.destroy) ch.destroy(); });
+    
+    detailsHtml += `
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Match Stats -->
+            <div class="col-md-4">
+                <div class="card shadow-sm h-100">
+                    <div class="card-header bg-warning text-white">
+                        <h6 class="mb-0"><i class="fas fa-trophy"></i> Match Statistics</h6>
+                    </div>
+                    <div class="card-body">
+    `;
+    
+    const matchStats = ['top5_win%', 'top10_win%', 'top20_win%', 'top50_win%', 'top100_win%', 'avg_opp_rank'];
+    matchStats.forEach(stat => {
+        const row = statsData.find(s => s.stat === stat);
+        if (row) {
+            const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
+            const label = stat === 'avg_opp_rank' ? 'Avg Opponent Rank' : 
+                         stat.replace('_win%', '').replace('top', 'vs Top ');
+            detailsHtml += `
+                <div class="stat-comparison-row">
+                    <div class="stat-name">${label}</div>
+                    <div class="stat-values">
+                        <span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}</span>
+                        <span class="vs-separator">vs</span>
+                        <span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}</span>
+                    </div>
+                </div>
+            `;
+        }
+    });
+    
+    detailsHtml += `
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
 
-    // Serve radar
-    if (labels.length) {
-        const ctx = document.getElementById('serveChart').getContext('2d');
-        serveChart = new Chart(ctx, {
-            type: 'radar',
-            data: {
-                labels,
-                datasets: [{
-                    label: player1,
-                    data: p1Data,
-                    borderColor: 'rgb(30,58,138)',
-                    backgroundColor: 'rgba(30,58,138,.1)',
-                    borderWidth: 2,
-                    pointBackgroundColor: 'rgb(30,58,138)'
-                },{
-                    label: player2,
-                    data: p2Data,
-                    borderColor: 'rgb(16,185,129)',
-                    backgroundColor: 'rgba(16,185,129,.1)',
-                    borderWidth: 2,
-                    pointBackgroundColor: 'rgb(16,185,129)'
-                }]
+    // Performance comparison chart
+    const winPct = getStat(statsData, 'win%');
+    const hold = getStat(statsData, 'hold%');
+    const brk = getStat(statsData, 'break%');
+
+    let chartHtml = `
+        <div class="card shadow-sm mt-4">
+            <div class="card-header">
+                <h5 class="mb-0">Performance Comparison</h5>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 400px;">
+                    <canvas id="performanceChart"></canvas>
+                </div>
+            </div>
+        </div>
+    `;
+
+    $('#results').html(surfaceIndicator + overviewHtml + detailsHtml + chartHtml);
+
+    // Destroy existing chart
+    if (performanceChart && performanceChart.destroy) performanceChart.destroy();
+
+    // Create performance comparison chart
+    const ctx = document.getElementById('performanceChart').getContext('2d');
+    performanceChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: ['Win %', 'Hold %', 'Break %'],
+            datasets: [{
+                label: player1,
+                data: [winPct.p1 || 0, hold.p1 || 0, brk.p1 || 0],
+                backgroundColor: 'rgba(30,58,138,.7)',
+                borderColor: 'rgb(30,58,138)',
+                borderWidth: 1
+            }, {
+                label: player2,
+                data: [winPct.p2 || 0, hold.p2 || 0, brk.p2 || 0],
+                backgroundColor: 'rgba(16,185,129,.7)',
+                borderColor: 'rgb(16,185,129)',
+                borderWidth: 1
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    max: 100,
+                    title: {
+                        display: true,
+                        text: 'Percentage (%)'
+                    }
+                }
             },
-            options: { responsive: true, maintainAspectRatio: false, scales: { r: { suggestedMin: 0, suggestedMax: 100, ticks: { stepSize: 20 } } } }
-        });
-    }
-
-    // Hold/Break horizontal bar
-    {
-        const ctx = document.getElementById('holdBreakChart').getContext('2d');
-        holdBreakChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: ['Hold%', 'Break%'],
-                datasets: [{
-                    label: player1,
-                    data: [hold.p1 ?? 0, brk.p1 ?? 0],
-                    backgroundColor: 'rgba(30,58,138,.7)'
-                },{
-                    label: player2,
-                    data: [hold.p2 ?? 0, brk.p2 ?? 0],
-                    backgroundColor: 'rgba(16,185,129,.7)'
-                }]
-            },
-            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { min: 0, max: 100 } } }
-        });
-    }
-
-    // Tiebreak bar
-    {
-        const ctx = document.getElementById('tbBarChart').getContext('2d');
-        tbBarChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: ['TB win%'],
-                datasets: [{
-                    label: player1, data: [tb.p1 ?? 0], backgroundColor: 'rgba(30,58,138,.8)'},
-                {   label: player2, data: [tb.p2 ?? 0], backgroundColor: 'rgba(239,68,68,.8)'}
-                ]
-            },
-            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { min: 0, max: 100 } } }
-        });
-    }
-
-    // Top-N grouped bar
-    {
-        const ctx = document.getElementById('topnChart').getContext('2d');
-        const labelsTop = ['Top5','Top10','Top20','Top50','Top100'];
-        const dataP1 = [t5.p1||0, t10.p1||0, t20.p1||0, t50.p1||0, t100.p1||0];
-        const dataP2 = [t5.p2||0, t10.p2||0, t20.p2||0, t50.p2||0, t100.p2||0];
-        topnChart = new Chart(ctx, {
-            type: 'bar',
-            data: {
-                labels: labelsTop,
-                datasets: [{
-                    label: player1, data: dataP1, backgroundColor: 'rgba(30,58,138,.8)'
-                },{
-                    label: player2, data: dataP2, backgroundColor: 'rgba(16,185,129,.8)'
-                }]
-            },
-            options: { responsive: true, maintainAspectRatio: false, scales: { y: { min:0, max: 100 } } }
-        });
-    }
+            plugins: {
+                legend: {
+                    position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + '%';
+                        }
+                    }
+                }
+            }
+        }
+    });
 }
 
 $('#compareForm').on('submit', function(e) {
@@ -371,7 +390,10 @@ $('#compareForm').on('submit', function(e) {
             $('#surfaceFilter .btn-group').html(btns);
             $('#surfaceFilter').show();
 
-            if (available.length) displayComparison(available[0]);
+            if (available.length) {
+                currentSurface = available[0];
+                displayComparison(currentSurface);
+            }
         },
         error: function(xhr) {
             $('.loading').hide();
