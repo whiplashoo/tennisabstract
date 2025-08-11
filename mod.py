@@ -27,6 +27,42 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Initialize database
 db = TennisDatabase(DATABASE_PATH)
 
+# ---------------- Score parsing helpers (tiebreaks, oriented by WL) ----------------
+def _standardize_score_dashes(score: str) -> str:
+    if not isinstance(score, str):
+        return ''
+    return score.replace('—', '-').replace('–', '-').replace('−', '-')
+
+# Match set tokens like "7-6(5)" or "6-4" anywhere in the score string; parentheses optional
+SET_TOKEN_RE = re.compile(r'(\d+)\s*[-–-]\s*(\d+)(?:\s*$(\d+)$)?')
+
+def _count_tb_oriented(score: str, wl_flag: str) -> tuple[int, int]:
+    """
+    Count tie-breaks from a score string, oriented by player result.
+    If wl_flag == 'W', player's set games are the first number in each set token.
+    If wl_flag == 'L', player's set games are the second number in each set token.
+    A tiebreak set is strictly 7-6 or 6-7 (parentheses optional).
+    """
+    if not isinstance(score, str) or not score:
+        return 0, 0
+    s = _standardize_score_dashes(score)
+    is_winner = str(wl_flag).upper() == 'W'
+    tb_won = 0
+    tb_lost = 0
+    for a_str, b_str, _ in SET_TOKEN_RE.findall(s):
+        try:
+            a = int(a_str)
+            b = int(b_str)
+        except Exception:
+            continue
+        p_games = a if is_winner else b
+        o_games = b if is_winner else a
+        if p_games == 7 and o_games == 6:
+            tb_won += 1
+        elif p_games == 6 and o_games == 7:
+            tb_lost += 1
+    return tb_won, tb_lost
+
 
 class TennisDataScraper:
     def __init__(self):
@@ -54,19 +90,47 @@ class TennisDataScraper:
                 if attempt == retries - 1:
                     raise
 
-    def get_player_matches(self, player_name):
-        """Get all matches for a player with database caching"""
-        # Check database first
-        cached_data = db.get_player_matches(player_name)
-        if cached_data is not None:
-            logging.info(f"Using database cached data for {player_name}")
-            return cached_data
+    def get_player_matches(self, player_name, force_refresh=False):
+        """Get all matches for a player with database caching and tb backfill"""
+        if not force_refresh:
+            cached_data = db.get_player_matches(player_name)
+            if cached_data is not None:
+                logging.info(f"Using database cached data for {player_name}")
+                if 'tb_won' not in cached_data.columns or 'tb_lost' not in cached_data.columns:
+                    try:
+                        cached_data = self._add_tb_columns(cached_data)
+                        try:
+                            db.cache_player_matches(player_name, cached_data)
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        logging.warning(f"Failed to backfill tb columns for cached data: {e}")
+                return cached_data
 
-        # If not in database or expired, fetch from web
         data = self._fetch_player_matches(player_name)
         if data is not None:
             db.cache_player_matches(player_name, data)
         return data
+
+    def _add_tb_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add tb_won/tb_lost to an existing DataFrame if missing, using WL-oriented parsing."""
+        if df is None or df.empty:
+            return df
+        if 'tb_won' in df.columns and 'tb_lost' in df.columns:
+            return df
+
+        def _safe_count(row):
+            sc = row.get('score', '')
+            wl = row.get('wl', '')
+            # Ignore W/O and empties
+            if sc in ['W/O', '', None] or pd.isna(sc):
+                return (0, 0)
+            return _count_tb_oriented(str(sc), str(wl))
+
+        counts = df.apply(_safe_count, axis=1)
+        df = df.copy()
+        df[['tb_won', 'tb_lost']] = pd.DataFrame(counts.tolist(), index=df.index).astype(int)
+        return df
 
     def _fetch_player_matches(self, player_name):
         """Fetch player matches from web"""
@@ -150,7 +214,7 @@ class TennisDataScraper:
             return []
 
     def _create_matches_dataframe(self, matches):
-        """Create a DataFrame from matches data"""
+        """Create a DataFrame from matches data and compute tb_won/tb_lost at ingestion (WL-oriented)."""
         # Include 'level' at index 3
         essential_columns = {
             0: 'date', 1: 'tourn', 2: 'surf', 3: 'level', 4: 'wl', 8: 'round',
@@ -167,44 +231,34 @@ class TennisDataScraper:
 
         # Filter out walkovers and empty scores
         df = df[~df['score'].isin(['W/O', '', None])]
-        df = df[df['score'].notna()]
+        df = df[df['score'].notna()].copy()
+
+        # Compute oriented tiebreak counts per match
+        tb_counts = df.apply(lambda r: _count_tb_oriented(str(r['score']), r['wl']), axis=1)
+        df[['tb_won', 'tb_lost']] = pd.DataFrame(tb_counts.tolist(), index=df.index).astype(int)
 
         df = df.sort_values('date')
-
         return df
 
 
 class TennisStatsCalculator:
     @staticmethod
-    def _count_tiebreaks(score: str):
-        """
-        Count tiebreaks won/lost for the player from a match score string.
-        Assumes the player's set score is the first number in each set (player pages).
-        A tiebreak set is detected by set games 7-6 or 6-7 (parentheses optional).
-        """
-        if not isinstance(score, str) or not score:
-            return 0, 0
+    def _pct(numer: int, denom: int) -> float:
+        try:
+            return round(100.0 * numer / denom, 1) if denom and denom > 0 else 0.0
+        except Exception:
+            return 0.0
 
-        # Find all set scores like "7-6(5)" or "6-7(4)" or "7-6"
-        pairs = re.findall(r'(\d+)\s*-\s*(\d+)(?:$[^)]+$)?', score)
-        tb_won = 0
-        tb_lost = 0
-        for a, b in pairs:
-            try:
-                ga = int(a)
-                gb = int(b)
-            except ValueError:
-                continue
-            if ga == 7 and gb == 6:
-                tb_won += 1
-            elif ga == 6 and gb == 7:
-                tb_lost += 1
-
-        return tb_won, tb_lost
+    @staticmethod
+    def _sum_or_zero(df, cols):
+        present = [c for c in cols if c in df.columns]
+        if not present:
+            return pd.DataFrame(index=df.index)
+        return df[present]
 
     @staticmethod
     def calculate_yearly_stats(df, surface=None):
-        """Calculate tennis statistics by year and optionally by surface, including Top-N opponent records"""
+        """Calculate tennis statistics by year and optionally by surface, including tiebreak stats."""
         if df is None or df.empty:
             return pd.DataFrame()
 
@@ -229,6 +283,11 @@ class TennisStatsCalculator:
         for col in numeric_columns:
             valid_df[col] = pd.to_numeric(valid_df[col], errors='coerce')
 
+        # Ensure tb columns exist (fallback if needed)
+        if 'tb_won' not in valid_df.columns or 'tb_lost' not in valid_df.columns:
+            tb_counts = valid_df.apply(lambda r: _count_tb_oriented(str(r.get('score', '')), r.get('wl', '')), axis=1)
+            valid_df[['tb_won', 'tb_lost']] = pd.DataFrame(tb_counts.tolist(), index=valid_df.index).astype(int)
+
         # Win-loss record for all valid matches
         wl_record = valid_df.groupby('year')['wl'].agg(
             wins=lambda x: (x == 'W').sum(),
@@ -238,10 +297,10 @@ class TennisStatsCalculator:
         wl_record['win%'] = (wl_record['wins'] / wl_record['total'] * 100).round(1)
         wl_record['W-L'] = wl_record.apply(lambda x: f"{int(x['wins'])}-{int(x['losses'])}", axis=1)
 
-        # Filter for matches with stats
+        # Filter for matches with detailed point stats
         with_pts = valid_df[valid_df['pts'].notna()]
 
-        # Calculate yearly sums (where stats exist)
+        # Calculate yearly sums (for detailed stats subset)
         yearly_sums = with_pts.groupby('year')[numeric_columns].agg({
             'aces': 'sum', 'dfs': 'sum', 'pts': 'sum', 'firsts': 'sum',
             'fwon': 'sum', 'swon': 'sum', 'saved': 'sum', 'chances': 'sum',
@@ -250,7 +309,7 @@ class TennisStatsCalculator:
         }).fillna(0)
 
         # Build result frame indexed by all years where matches occurred
-        years_index = wl_record.index.union(yearly_sums.index)
+        years_index = wl_record.index.union(yearly_sums.index).sort_values()
         yearly_stats = pd.DataFrame(index=years_index)
 
         # Basic records
@@ -260,7 +319,7 @@ class TennisStatsCalculator:
         # Reindex sums to align
         ys = yearly_sums.reindex(yearly_stats.index).fillna(0)
 
-        # Percentages
+        # Percentages from detailed stats
         with np.errstate(divide='ignore', invalid='ignore'):
             yearly_stats['ace%'] = (ys['aces'] / ys['pts'] * 100).round(2)
             yearly_stats['df%'] = (ys['dfs'] / ys['pts'] * 100).round(2)
@@ -273,8 +332,7 @@ class TennisStatsCalculator:
             yearly_stats['hold%'] = (100 - ((ys['chances'] - ys['saved']) / ys['games'] * 100)).round(1)
             yearly_stats['break%'] = ((ys['ochances'] - ys['osaved']) / ys['ogames'] * 100).round(1)
 
-        yearly_stats['avg_opp_rank'] = ys['orank'].round(1)
-        yearly_stats['avg_opp_rank'] = yearly_stats['avg_opp_rank'].fillna(0)
+        yearly_stats['avg_opp_rank'] = ys['orank'].round(1).fillna(0)
 
         # Share of matches that have detailed stats
         counts_with_pts = with_pts.groupby('year').size()
@@ -304,16 +362,15 @@ class TennisStatsCalculator:
             yearly_stats[f'top{top_n}_W-L'] = wl_str
             yearly_stats[f'top{top_n}_win%'] = winp.fillna(0)
 
-        # Tiebreak records (based on score, all valid matches)
-        tb_pairs = valid_df['score'].apply(TennisStatsCalculator._count_tiebreaks)
-        tb_df = pd.DataFrame(tb_pairs.tolist(), columns=['tb_won', 'tb_lost'])
-        tb_df['year'] = valid_df['year'].values
-        tb_year = tb_df.groupby('year')[['tb_won', 'tb_lost']].sum().reindex(yearly_stats.index).fillna(0)
-
+        # Tiebreak records (use precomputed columns)
+        tb_year = valid_df.groupby('year')[['tb_won', 'tb_lost']].sum().reindex(yearly_stats.index).fillna(0)
         tb_totals = tb_year['tb_won'] + tb_year['tb_lost']
         with np.errstate(divide='ignore', invalid='ignore'):
             tb_winp = (tb_year['tb_won'] / tb_totals * 100).round(1)
 
+        # Include numeric tb columns and readable strings
+        yearly_stats['tb_won'] = tb_year['tb_won'].astype(int)
+        yearly_stats['tb_lost'] = tb_year['tb_lost'].astype(int)
         yearly_stats['tb_W-L'] = (tb_year['tb_won'].astype(int).astype(str)
                                   + '-' + tb_year['tb_lost'].astype(int).astype(str))
         yearly_stats['tb_win%'] = tb_winp.fillna(0)
@@ -412,7 +469,7 @@ class TennisStatsCalculator:
 
     @staticmethod
     def calculate_career_stats(df):
-        """Calculate career statistics, including Top-N opponent records"""
+        """Calculate career statistics, including tiebreak stats and Top-N opponent records"""
         if df is None or df.empty:
             return pd.DataFrame()
 
@@ -427,13 +484,18 @@ class TennisStatsCalculator:
 
         # Filter out walkovers and empty scores
         stats_df = stats_df[~stats_df['score'].isin(['W/O', '', None])]
-        stats_df = stats_df[stats_df['score'].notna()]
+        stats_df = stats_df[stats_df['score'].notna()].copy()
+
+        # Ensure tb columns exist (fallback if needed)
+        if 'tb_won' not in stats_df.columns or 'tb_lost' not in stats_df.columns:
+            tb_counts = stats_df.apply(lambda r: _count_tb_oriented(str(r.get('score', '')), r.get('wl', '')), axis=1)
+            stats_df[['tb_won', 'tb_lost']] = pd.DataFrame(tb_counts.tolist(), index=stats_df.index).astype(int)
 
         total_matches = len(stats_df)
         if total_matches == 0:
             return pd.DataFrame()
 
-        wins = sum(stats_df['wl'] == 'W')
+        wins = int((stats_df['wl'] == 'W').sum())
         losses = total_matches - wins
         win_pct = round((wins / total_matches * 100), 1)
         wl_record = f"{wins}-{losses}"
@@ -448,6 +510,12 @@ class TennisStatsCalculator:
             'orank': 'mean'
         }).fillna(0)
 
+        # Tiebreak totals across all valid matches (not only those with detailed stats)
+        tb_won_total = int(stats_df['tb_won'].sum())
+        tb_lost_total = int(stats_df['tb_lost'].sum())
+        tb_total = tb_won_total + tb_lost_total
+        tb_winp = round(tb_won_total / tb_total * 100, 1) if tb_total > 0 else 0.0
+
         career_stats = {
             'W-L': wl_record,
             'win%': win_pct,
@@ -457,33 +525,28 @@ class TennisStatsCalculator:
             '1st_win%': (career_sums['fwon'] / career_sums['firsts'] * 100).round(1) if career_sums['firsts'] > 0 else 0,
             '2nd_win%': (career_sums['swon'] / (career_sums['pts'] - career_sums['firsts']) * 100).round(1) if (career_sums['pts'] - career_sums['firsts']) > 0 else 0,
             'bp_saved%': (career_sums['saved'] / career_sums['chances'] * 100).round(1) if career_sums['chances'] > 0 else 0,
-            'hold%': 100 - ((career_sums['chances'] - career_sums['saved']) / career_sums['games'] * 100).round(1) if career_sums['games'] > 0 else 0,
+            'hold%': (100 - ((career_sums['chances'] - career_sums['saved']) / career_sums['games'] * 100)).round(1) if career_sums['games'] > 0 else 0,
             'break%': ((career_sums['ochances'] - career_sums['osaved']) / career_sums['ogames'] * 100).round(1) if career_sums['ogames'] > 0 else 0,
             'avg_opp_rank': round(career_sums['orank'], 1) if not np.isnan(career_sums['orank']) else 0,
-            'matches_with_stats%': stats_pct
+            'matches_with_stats%': stats_pct,
+            # Tiebreak outputs
+            'tb_won': tb_won_total,
+            'tb_lost': tb_lost_total,
+            'tb_W-L': f"{tb_won_total}-{tb_lost_total}",
+            'tb_win%': tb_winp
         }
 
         # Top-N opponent records (ignore matches with missing orank)
         orank_num = pd.to_numeric(stats_df['orank'], errors='coerce')
-        for top_n in top_brackets:
+        for top_n in (5, 10, 20, 50, 100):
             sub = stats_df[orank_num <= top_n]
-            w = (sub['wl'] == 'W').sum()
-            l = (sub['wl'] == 'L').sum()
+            w = int((sub['wl'] == 'W').sum())
+            l = int((sub['wl'] == 'L').sum())
             t = w + l
-            wl = f"{int(w)}-{int(l)}"
+            wl = f"{w}-{l}"
             wp = round((w / t * 100), 1) if t > 0 else 0.0
             career_stats[f'top{top_n}_W-L'] = wl
             career_stats[f'top{top_n}_win%'] = wp
-
-        # Tiebreak records (career)
-        tb_pairs = stats_df['score'].apply(TennisStatsCalculator._count_tiebreaks)
-        tb_won = int(sum(w for w, _ in tb_pairs))
-        tb_lost = int(sum(l for _, l in tb_pairs))
-        tb_total = tb_won + tb_lost
-        tb_winp = round(tb_won / tb_total * 100, 1) if tb_total > 0 else 0.0
-
-        career_stats['tb_W-L'] = f"{tb_won}-{tb_lost}"
-        career_stats['tb_win%'] = tb_winp
 
         out = pd.DataFrame(career_stats, index=['career'])
         return out.replace([np.inf, -np.inf], np.nan).fillna(0)
@@ -536,7 +599,8 @@ class TennisStatsCalculator:
     @staticmethod
     def calculate_tiebreak_records(df, surface=None):
         """
-        Return per-year tiebreak W-L and win% based on set scores (7-6/6-7).
+        Return per-year tiebreak W-L and win% based on set scores (7-6/6-7),
+        using tb_won/tb_lost columns if present.
         """
         if df is None or df.empty:
             return pd.DataFrame()
@@ -555,16 +619,18 @@ class TennisStatsCalculator:
         if data.empty:
             return pd.DataFrame()
 
-        tb_pairs = data['score'].apply(TennisStatsCalculator._count_tiebreaks)
-        tb_df = pd.DataFrame(tb_pairs.tolist(), columns=['tb_won', 'tb_lost'])
-        tb_df['year'] = data['year'].values
+        if 'tb_won' not in data.columns or 'tb_lost' not in data.columns:
+            tb_counts = data.apply(lambda r: _count_tb_oriented(str(r.get('score', '')), r.get('wl', '')), axis=1)
+            data[['tb_won', 'tb_lost']] = pd.DataFrame(tb_counts.tolist(), index=data.index).astype(int)
 
-        out = tb_df.groupby('year')[['tb_won', 'tb_lost']].sum().sort_index()
+        out = data.groupby('year')[['tb_won', 'tb_lost']].sum().sort_index()
         totals = out['tb_won'] + out['tb_lost']
         with np.errstate(divide='ignore', invalid='ignore'):
             winp = (out['tb_won'] / totals * 100).round(1)
 
         result = pd.DataFrame(index=out.index)
+        result['tb_won'] = out['tb_won'].astype(int)
+        result['tb_lost'] = out['tb_lost'].astype(int)
         result['tb_W-L'] = out['tb_won'].astype(int).astype(str) + '-' + out['tb_lost'].astype(int).astype(str)
         result['tb_win%'] = winp.fillna(0)
 
@@ -633,8 +699,8 @@ scraper = TennisDataScraper()
 calculator = TennisStatsCalculator()
 
 # Convenience functions for backward compatibility
-def get_player_matches(player_name):
-    return scraper.get_player_matches(player_name)
+def get_player_matches(player_name, force_refresh=False):
+    return scraper.get_player_matches(player_name, force_refresh=force_refresh)
 
 def calculate_yearly_stats(df, surface=None):
     return calculator.calculate_yearly_stats(df, surface)
@@ -688,84 +754,25 @@ def career(player_name):
         logging.error(f"Error getting career stats for {player_name}: {str(e)}")
         return None
 
-
-# Example usage (safe to remove or comment out)
+# Example usage (optional)
 if __name__ == '__main__':
     try:
-        player = "Daria Kasatkina"
-        opponent = "Maya Joint"
-
-        # Fetch matches (now includes 'level' column)
+        player = "Iga Swiatek"
         matches_df = get_player_matches(player)
         print(f"Fetched matches for {player}. Columns: {list(matches_df.columns) if matches_df is not None else 'No data'}")
 
-        # Yearly stats (all surfaces) with Top-N records and tiebreaks
         ys = calculate_yearly_stats(matches_df)
         print("\nYearly stats (tail):")
         print(ys.tail(3))
 
-        # Yearly stats by surface with Top-N records and tiebreaks
-        try:
-            clay_ys = calculate_yearly_stats(matches_df, surface="Clay")
-            if not clay_ys.empty:
-                print("\nClay 2024 sample:")
-                print(clay_ys.loc[2024, ['W-L', 'win%', 'top10_W-L', 'top10_win%', 'tb_W-L', 'tb_win%']])
-        except Exception:
-            pass
-
-        # Dedicated Top-N records per year
-        topn_all = calculate_topn_records(matches_df)
-        print("\nTop-N per year (tail):")
-        print(topn_all.tail(3))
-
-        # Dedicated tiebreak records per year
         tb_yearly = calculate_tiebreak_records(matches_df)
         print("\nTiebreak records per year (tail):")
         print(tb_yearly.tail(3))
 
-        # Career stats with Top-N records and tiebreaks
         car = career(player)
         if car is not None and 'career' in car.index:
             print("\nCareer stats (selected columns):")
-            print(car.loc['career', ['W-L', 'win%', 'top50_W-L', 'top50_win%', 'tb_W-L', 'tb_win%']])
-
-        # Recent form
-        recent = calculate_recent_form(matches_df, num_matches=10)
-        print("\nRecent form:")
-        print({
-            'wins': recent.get('wins'),
-            'losses': recent.get('losses'),
-            'form_string': recent.get('form_string'),
-            'avg_opp_rank': recent.get('avg_opp_rank')
-        })
-
-        # H2H formatting
-        h2h_df = format_h2h_matches(matches_df, player, opponent)
-        print(f"\nH2H {player} vs {opponent} (head):")
-        print(h2h_df.head())
-
-        # Compare two players on a given year/surface
-        cmp_df = compare(player, opponent, year=2024, surface='Hard')
-        print("\nCompare on 2024 Hard:")
-        print(cmp_df)
-
-        # Tiebreak examples
-        print("\nTiebreak examples:")
-        
-        # Per-year tiebreak records (all surfaces)
-        tb_yearly = calculate_tiebreak_records(matches_df)
-        if not tb_yearly.empty:
-            print("Per-year tiebreaks (2024):")
-            try:
-                print(tb_yearly.loc[2024])
-            except KeyError:
-                print("No data for 2024")
-
-        # Per-year tiebreak records on a surface
-        tb_hard = calculate_tiebreak_records(matches_df, surface="Hard")
-        if not tb_hard.empty:
-            print("\nHard court tiebreaks (tail):")
-            print(tb_hard.tail())
+            print(car.loc['career', ['W-L', 'win%', 'tb_won', 'tb_lost', 'tb_W-L', 'tb_win%']])
 
     except Exception as e:
         logging.error(f"Example usage error: {e}")
