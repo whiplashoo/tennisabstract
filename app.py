@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify
 import pandas as pd
+import numpy as np
 from mod import (
     get_player_matches, 
     calculate_yearly_stats,
@@ -9,15 +10,46 @@ from mod import (
     career
 )
 import json
-from datetime import datetime
+from datetime import datetime, date
+import logging
 
 app = Flask(__name__)
+logging.basicConfig(level=logging.INFO)
+
+def to_py(val):
+    """Convert numpy/pandas types and NaN/Timestamp to JSON-safe Python primitives."""
+    if pd.isna(val):
+        return None
+    # Datetime-like
+    if isinstance(val, (pd.Timestamp, datetime, date)):
+        try:
+            return str(val.date()) if hasattr(val, "date") else str(val)
+        except Exception:
+            return str(val)
+    # Numpy to Python
+    if isinstance(val, (np.integer,)):
+        return int(val)
+    if isinstance(val, (np.floating,)):
+        return float(val)
+    if isinstance(val, (np.bool_,)):
+        return bool(val)
+    return val
+
+def series_to_py_dict(s):
+    """Convert a pandas Series to a JSON-safe dict."""
+    out = {}
+    for k, v in s.to_dict().items():
+        out[str(k)] = to_py(v)
+    return out
 
 def dataframe_to_dict(df):
-    """Convert DataFrame to dictionary format for easier frontend handling"""
+    """Convert DataFrame to JSON-safe list of dicts."""
+    if df is None or len(df) == 0:
+        return []
     if df.index.name:
         df = df.reset_index()
-    return df.to_dict('records')
+    records = df.to_dict('records')
+    return [{k: to_py(v) for k, v in rec.items()} for rec in records]
 
 @app.route('/')
 def index():
@@ -28,7 +60,10 @@ def compare_players():
     if request.method == 'POST':
         player1 = request.form.get('player1', '').strip()
         player2 = request.form.get('player2', '').strip()
-        year = int(request.form.get('year', datetime.now().year))
+        try:
+            year = int(request.form.get('year', datetime.now().year))
+        except Exception:
+            year = datetime.now().year
         
         if not player1 or not player2:
             return jsonify({'error': 'Please enter both player names'}), 400
@@ -40,7 +75,6 @@ def compare_players():
         if p1_matches is None or p2_matches is None:
             return jsonify({'error': 'One or both players not found'}), 404
         
-        # Calculate stats for all surfaces
         all_surfaces_stats = {}
         surfaces = ['All', 'Hard', 'Clay', 'Grass', 'Carpet']
         
@@ -50,24 +84,45 @@ def compare_players():
                 p1_stats = calculate_yearly_stats(p1_matches, surface_filter)
                 p2_stats = calculate_yearly_stats(p2_matches, surface_filter)
                 
+                if p1_stats is None or p2_stats is None or p1_stats.empty or p2_stats.empty:
+                    continue
+                
                 if year in p1_stats.index and year in p2_stats.index:
-                    p1_data = p1_stats.loc[year]
-                    p2_data = p2_stats.loc[year]
+                    p1_row = p1_stats.loc[year]
+                    p2_row = p2_stats.loc[year]
+                    if isinstance(p1_row, pd.DataFrame):
+                        p1_row = p1_row.iloc[0]
+                    if isinstance(p2_row, pd.DataFrame):
+                        p2_row = p2_row.iloc[0]
                     
-                    # Convert to structured data
+                    # Union of stat keys so new fields (e.g., tb_win%, top10_win%) are not lost
+                    p1_keys = set(map(str, p1_row.index))
+                    p2_keys = set(map(str, p2_row.index))
+                    all_keys = sorted(p1_keys.union(p2_keys))
+                    
+                    # Exclude non-stat helper labels if present
+                    exclude = {'surface', 'year'}
+                    
                     stats_data = []
-                    for stat in p1_data.index:
-                        if stat != 'surface':  # Skip surface indicator
-                            stats_data.append({
-                                'stat': stat,
-                                'player1_value': p1_data[stat],
-                                'player2_value': p2_data[stat],
-                                'player1_name': player1,
-                                'player2_name': player2
-                            })
+                    for stat in all_keys:
+                        if stat in exclude:
+                            continue
+                        p1_val = to_py(p1_row.get(stat, None))
+                        p2_val = to_py(p2_row.get(stat, None))
+                        # Allow strings (e.g., 'W-L'), numeric percentages, etc.
+                        stats_data.append({
+                            'stat': stat,
+                            'player1_value': p1_val,
+                            'player2_value': p2_val,
+                            'player1_name': player1,
+                            'player2_name': player2
+                        })
                     
-                    all_surfaces_stats[surface] = stats_data
-            except:
+                    # Only add surface if we have at least one stat
+                    if stats_data:
+                        all_surfaces_stats[surface] = stats_data
+            except Exception as e:
+                logging.exception(f"Compare error for surface={surface}: {e}")
                 continue
         
         if not all_surfaces_stats:
@@ -91,44 +146,52 @@ def head_to_head():
         if not player1 or not player2:
             return jsonify({'error': 'Please enter both player names'}), 400
         
-        matches_df = get_player_matches(player1)
-        if matches_df is None:
-            return jsonify({'error': f'Player {player1} not found'}), 404
-        
-        h2h_data = format_h2h_matches(matches_df, player1, player2)
-        
-        if h2h_data.empty:
-            return jsonify({'error': 'No head-to-head matches found between these players'}), 404
-        
-        # Calculate H2H summary
-        p1_wins = len(h2h_data[h2h_data.winner_name == player1])
-        p2_wins = len(h2h_data[h2h_data.winner_name == player2])
-        
-        # Get surface breakdown
-        surface_stats = h2h_data.groupby('surface')['winner_name'].value_counts().unstack(fill_value=0)
-        surface_breakdown = {}
-        for surface in surface_stats.index:
-            surface_breakdown[surface] = {
-                player1: int(surface_stats.loc[surface].get(player1, 0)),
-                player2: int(surface_stats.loc[surface].get(player2, 0))
-            }
-        
-        # Convert matches to list of dicts
-        matches_list = h2h_data.to_dict('records')
-        for match in matches_list:
-            match['match_date'] = str(match['match_date'])
-        
-        return jsonify({
-            'matches': matches_list,
-            'summary': {
-                'player1': player1,
-                'player2': player2,
-                'p1_wins': p1_wins,
-                'p2_wins': p2_wins,
-                'total_matches': len(h2h_data),
-                'surface_breakdown': surface_breakdown
-            }
-        })
+        try:
+            matches_df = get_player_matches(player1)
+            if matches_df is None:
+                return jsonify({'error': f'Player {player1} not found'}), 404
+            
+            h2h_data = format_h2h_matches(matches_df, player1, player2)
+            if h2h_data is None or h2h_data.empty:
+                return jsonify({'error': 'No head-to-head matches found between these players'}), 404
+            
+            # H2H summary
+            p1_wins = int((h2h_data['winner_name'] == player1).sum())
+            p2_wins = int((h2h_data['winner_name'] == player2).sum())
+            
+            # Surface breakdown
+            surface_stats = h2h_data.groupby('surface')['winner_name'].value_counts().unstack(fill_value=0)
+            surface_breakdown = {}
+            for surface in surface_stats.index:
+                surface_breakdown[str(surface)] = {
+                    player1: int(surface_stats.loc[surface].get(player1, 0)),
+                    player2: int(surface_stats.loc[surface].get(player2, 0))
+                }
+            
+            # Convert matches to list of dicts, ensure JSON-safe types
+            matches_list = []
+            for rec in h2h_data.to_dict('records'):
+                # Rename fields if needed; ensure match_date is string
+                if 'match_date' in rec:
+                    rec['match_date'] = to_py(rec['match_date'])
+                for k, v in list(rec.items()):
+                    rec[k] = to_py(v)
+                matches_list.append(rec)
+            
+            return jsonify({
+                'matches': matches_list,
+                'summary': {
+                    'player1': player1,
+                    'player2': player2,
+                    'p1_wins': p1_wins,
+                    'p2_wins': p2_wins,
+                    'total_matches': len(h2h_data),
+                    'surface_breakdown': surface_breakdown
+                }
+            })
+        except Exception as e:
+            logging.exception(f"H2H error: {e}")
+            return jsonify({'error': 'An error occurred while computing H2H'}), 500
     
     return render_template('h2h.html')
 
@@ -140,61 +203,105 @@ def career_stats():
         if not player_name:
             return jsonify({'error': 'Please enter a player name'}), 400
         
-        # Get player matches
-        matches = get_player_matches(player_name)
-        if matches is None:
-            return jsonify({'error': f'Player {player_name} not found'}), 404
-        
-        career_data = career(player_name)
-        
-        if career_data is None:
-            return jsonify({'error': f'No data available for {player_name}'}), 404
-        
-        # Get recent form
-        recent_form = calculate_recent_form(matches)
-        
-        # Get surface breakdown with yearly details
-        surface_breakdown = {}
-        for surface in ['Hard', 'Clay', 'Grass', 'Carpet']:
-            surface_stats = calculate_yearly_stats(matches, surface)
-            if not surface_stats.empty:
-                # Convert to dict with years as keys
-                surface_yearly = {}
-                for year in surface_stats.index:
-                    year_data = surface_stats.loc[year].to_dict()
-                    year_data['year'] = int(year)
-                    surface_yearly[str(year)] = year_data
+        try:
+            # Get player matches
+            matches = get_player_matches(player_name)
+            if matches is None:
+                return jsonify({'error': f'Player {player_name} not found'}), 404
+            
+            career_data = career(player_name)
+            if career_data is None or (isinstance(career_data, pd.DataFrame) and career_data.empty):
+                return jsonify({'error': f'No data available for {player_name}'}), 404
+            
+            # Recent form
+            recent_form = calculate_recent_form(matches) or {}
+            # Make recent_form JSON-safe
+            if isinstance(recent_form, dict):
+                if 'matches' in recent_form and isinstance(recent_form['matches'], list):
+                    for m in recent_form['matches']:
+                        for k, v in list(m.items()):
+                            m[k] = to_py(v)
+                for k, v in list(recent_form.items()):
+                    if k != 'matches':
+                        recent_form[k] = to_py(v)
+            
+            # Surface breakdown with yearly details
+            surface_breakdown = {}
+            for surface in ['Hard', 'Clay', 'Grass', 'Carpet']:
+                try:
+                    surface_stats = calculate_yearly_stats(matches, surface)
+                except Exception as e:
+                    logging.exception(f"calculate_yearly_stats failed on surface={surface}: {e}")
+                    surface_stats = None
                 
-                # Calculate surface career totals
-                surface_matches = matches[matches['surf'] == surface]
-                surface_career = calculate_career_stats(surface_matches)
-                if not surface_career.empty:
-                    surface_breakdown[surface] = {
-                        'yearly': surface_yearly,
-                        'career': surface_career.iloc[0].to_dict()
-                    }
-        
-        # Separate yearly stats from career summary
-        yearly_stats = career_data[career_data.index != 'career'].copy()
-        career_summary = career_data[career_data.index == 'career'].iloc[0].to_dict()
-        
-        # Convert yearly stats to list of dicts and sort by year descending
-        yearly_data = []
-        for year, row in yearly_stats.iterrows():
-            year_dict = row.to_dict()
-            year_dict['year'] = int(year)
-            yearly_data.append(year_dict)
-        
-        # Sort by year in descending order
-        yearly_data.sort(key=lambda x: x['year'], reverse=True)
-        
-        return jsonify({
-            'yearly_stats': yearly_data,
-            'career_summary': career_summary,
-            'recent_form': recent_form,
-            'surface_breakdown': surface_breakdown,
-            'player': player_name
-        })
+                if surface_stats is not None and not surface_stats.empty:
+                    # Yearly dict
+                    surface_yearly = {}
+                    for yr in surface_stats.index:
+                        row = surface_stats.loc[yr]
+                        if isinstance(row, pd.DataFrame):
+                            row = row.iloc[0]
+                        row_dict = series_to_py_dict(row)
+                        row_dict['year'] = int(yr)
+                        surface_yearly[str(int(yr))] = row_dict
+                    
+                    # Surface career totals
+                    try:
+                        surface_matches = matches[matches['surf'] == surface]
+                        surface_career = calculate_career_stats(surface_matches)
+                    except Exception as e:
+                        logging.exception(f"calculate_career_stats failed on surface={surface}: {e}")
+                        surface_career = None
+                    
+                    if surface_career is not None and not surface_career.empty:
+                        career_row = surface_career.iloc[0]
+                        surface_breakdown[surface] = {
+                            'yearly': surface_yearly,
+                            'career': series_to_py_dict(career_row)
+                        }
+            
+            # Separate yearly stats from career summary; accept DF or dict
+            if isinstance(career_data, pd.DataFrame):
+                if 'career' in career_data.index:
+                    career_summary_row = career_data.loc['career']
+                    if isinstance(career_summary_row, pd.DataFrame):
+                        career_summary_row = career_summary_row.iloc[0]
+                    career_summary = series_to_py_dict(career_summary_row)
+                else:
+                    # Fallback: last row as career if no explicit 'career'
+                    career_summary = series_to_py_dict(career_data.iloc[-1])
+                
+                yearly_stats_df = career_data[career_data.index != 'career'].copy()
+                yearly_data = []
+                for yr, row in yearly_stats_df.iterrows():
+                    row_dict = series_to_py_dict(row)
+                    try:
+                        row_dict['year'] = int(yr)
+                    except Exception:
+                        # If index is string, try to coerce
+                        try:
+                            row_dict['year'] = int(str(yr).strip())
+                        except Exception:
+                            row_dict['year'] = to_py(yr)
+                    yearly_data.append(row_dict)
+                yearly_data.sort(key=lambda x: (x.get('year') is None, x.get('year')), reverse=True)
+            elif isinstance(career_data, dict):
+                # Support dict-based career() if mod.py changed
+                yearly_data = career_data.get('yearly_stats', [])
+                career_summary = career_data.get('career_summary', {})
+            else:
+                return jsonify({'error': f'Unexpected career data format for {player_name}'}), 500
+            
+            return jsonify({
+                'yearly_stats': yearly_data,
+                'career_summary': career_summary,
+                'recent_form': recent_form,
+                'surface_breakdown': surface_breakdown,
+                'player': player_name
+            })
+        except Exception as e:
+            logging.exception(f"Career error: {e}")
+            return jsonify({'error': 'An error occurred while computing career stats'}), 500
     
     return render_template('career.html')
 

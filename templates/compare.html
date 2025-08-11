@@ -44,11 +44,8 @@
 
 <div class="alert alert-danger error-message" role="alert"></div>
 
-<!-- Surface filter (shown after results) -->
 <div id="surfaceFilter" class="mt-4" style="display: none;">
-    <div class="btn-group" role="group">
-        <!-- Buttons will be dynamically added based on available data -->
-    </div>
+    <div class="btn-group" role="group"></div>
 </div>
 
 <div id="results" class="mt-4"></div>
@@ -58,17 +55,16 @@
 <script>
 let allSurfacesData = null;
 let currentSurface = 'All';
+let serveChart = null, holdBreakChart = null, tbBarChart = null, topnChart = null;
 
-// Helper function to determine better value
+// Helper: better stat direction
 function isBetterValue(stat, val1, val2) {
     const lowerIsBetter = ['df%', 'losses', 'avg_opp_rank'];
-    if (lowerIsBetter.includes(stat)) {
-        return val1 < val2;
-    }
-    return val1 > val2;
+    if (lowerIsBetter.includes(stat)) return (parseFloat(val1) || 0) < (parseFloat(val2) || 0);
+    return (parseFloat(val1) || 0) > (parseFloat(val2) || 0);
 }
 
-// Helper function to format stat names
+// Helper: friendly labels
 function formatStatName(stat) {
     const statNames = {
         'W-L': 'Win-Loss Record',
@@ -82,7 +78,14 @@ function formatStatName(stat) {
         'hold%': 'Service Hold %',
         'break%': 'Break Percentage',
         'avg_opp_rank': 'Avg Opponent Rank',
-        'matches_with_stats%': 'Matches with Stats %'
+        'matches_with_stats%': 'Matches with Stats %',
+        'tb_W-L': 'Tiebreak W-L',
+        'tb_win%': 'Tiebreak Win %',
+        'top5_win%': 'Win% vs Top 5',
+        'top10_win%': 'Win% vs Top 10',
+        'top20_win%': 'Win% vs Top 20',
+        'top50_win%': 'Win% vs Top 50',
+        'top100_win%': 'Win% vs Top 100'
     };
     return statNames[stat] || stat;
 }
@@ -95,10 +98,19 @@ $(document).on('click', '#surfaceFilter button', function() {
     displayComparison(currentSurface);
 });
 
+function getStat(statsData, key) {
+    const row = statsData.find(s => s.stat === key);
+    if (!row) return { p1: null, p2: null, names: null };
+    return {
+        p1: parseFloat(row.player1_value) || 0,
+        p2: parseFloat(row.player2_value) || 0,
+        names: { p1: row.player1_name, p2: row.player2_name }
+    };
+}
+
 function displayComparison(surface) {
     const statsData = allSurfacesData[surface];
-    
-    if (!statsData || statsData.length === 0) {
+    if (!statsData || !statsData.length) {
         $('#results').html(`
             <div class="alert alert-warning">
                 No data available for ${surface} surface in the selected year.
@@ -106,38 +118,37 @@ function displayComparison(surface) {
         `);
         return;
     }
-    
-    // Add surface indicator if filtered
+
+    const player1 = statsData[0].player1_name;
+    const player2 = statsData[0].player2_name;
+
     let surfaceIndicator = '';
     if (surface !== 'All') {
         surfaceIndicator = `<div class="alert alert-info mb-3">
             <i class="fas fa-filter"></i> Showing statistics for <strong>${surface}</strong> court only
         </div>`;
     }
-    
-    // Create key stats cards
+
+    // Key stats row
     let keyStatsHtml = '<div class="row mb-4">';
-    
-    // Find key statistics
     const keyStats = ['win%', 'ace%', 'hold%', 'break%'];
-    
     keyStats.forEach(stat => {
-        const statData = statsData.find(s => s.stat === stat);
-        if (statData) {
-            const p1Better = isBetterValue(stat, statData.player1_value, statData.player2_value);
+        const row = statsData.find(s => s.stat === stat);
+        if (row) {
+            const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
             keyStatsHtml += `
-                <div class="col-md-3">
+                <div class="col-sm-6 col-md-3">
                     <div class="stat-card text-center">
                         <div class="stat-label">${formatStatName(stat)}</div>
                         <div class="d-flex justify-content-around mt-3">
                             <div>
-                                <div class="player1-value">${statData.player1_value}</div>
-                                <small class="text-muted">${statData.player1_name}</small>
+                                <div class="player1-value">${row.player1_value}</div>
+                                <small class="text-muted">${player1}</small>
                                 ${p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
                             </div>
                             <div>
-                                <div class="player2-value">${statData.player2_value}</div>
-                                <small class="text-muted">${statData.player2_name}</small>
+                                <div class="player2-value">${row.player2_value}</div>
+                                <small class="text-muted">${player2}</small>
                                 ${!p1Better ? '<i class="fas fa-crown text-warning ms-1"></i>' : ''}
                             </div>
                         </div>
@@ -146,10 +157,9 @@ function displayComparison(surface) {
             `;
         }
     });
-    
     keyStatsHtml += '</div>';
-    
-    // Create detailed comparison
+
+    // Detailed stats list
     let detailsHtml = `
         <div class="card shadow-sm">
             <div class="card-header bg-primary text-white">
@@ -157,16 +167,13 @@ function displayComparison(surface) {
             </div>
             <div class="card-body">
     `;
-    
     statsData.forEach(stat => {
         const p1Val = stat.player1_value;
         const p2Val = stat.player2_value;
         let p1Better = false;
-        
         if (stat.stat !== 'W-L') {
-            p1Better = isBetterValue(stat.stat, parseFloat(p1Val) || 0, parseFloat(p2Val) || 0);
+            p1Better = isBetterValue(stat.stat, p1Val, p2Val);
         }
-        
         detailsHtml += `
             <div class="stat-comparison">
                 <div style="width: 30%">
@@ -194,136 +201,177 @@ function displayComparison(surface) {
             </div>
         `;
     });
-    
     detailsHtml += '</div></div>';
-    
-    // Add chart for serve stats
+
+    // Charts: Serve radar; Hold/Break compare; Tiebreak bar; Top-N bar
+    const serveStats = ['1st_in%', '1st_win%', '2nd_win%', 'ace%'];
+    const labels = [];
+    const p1Data = [];
+    const p2Data = [];
+
+    serveStats.forEach(stat => {
+        const row = statsData.find(s => s.stat === stat);
+        if (row) {
+            labels.push(formatStatName(stat));
+            p1Data.push(parseFloat(row.player1_value) || 0);
+            p2Data.push(parseFloat(row.player2_value) || 0);
+        }
+    });
+
+    const hold = getStat(statsData, 'hold%');
+    const brk = getStat(statsData, 'break%');
+    const tb = getStat(statsData, 'tb_win%');
+
+    const t5 = getStat(statsData, 'top5_win%');
+    const t10 = getStat(statsData, 'top10_win%');
+    const t20 = getStat(statsData, 'top20_win%');
+    const t50 = getStat(statsData, 'top50_win%');
+    const t100 = getStat(statsData, 'top100_win%');
+
+    const hasTopN = [t5, t10, t20, t50, t100].some(o => Number.isFinite(o.p1) || Number.isFinite(o.p2));
+
     let chartHtml = `
-        <div class="card shadow-sm mt-4">
-            <div class="card-header">
-                <h5 class="mb-0">Serve Performance Comparison</h5>
+        <div class="row g-3">
+            <div class="col-md-6">
+                <div class="card shadow-sm">
+                    <div class="card-header"><h5 class="mb-0">Serve Performance</h5></div>
+                    <div class="card-body"><div class="chart-container" style="height: 380px;"><canvas id="serveChart"></canvas></div></div>
+                </div>
             </div>
-            <div class="card-body">
-                <div class="chart-container" style="height: 400px;">
-                    <canvas id="serveChart"></canvas>
+            <div class="col-md-6">
+                <div class="card shadow-sm">
+                    <div class="card-header"><h5 class="mb-0">Hold% and Break%</h5></div>
+                    <div class="card-body"><div class="chart-container" style="height: 380px;"><canvas id="holdBreakChart"></canvas></div></div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card shadow-sm mt-3 mt-md-0">
+                    <div class="card-header"><h5 class="mb-0">Tiebreak Win %</h5></div>
+                    <div class="card-body"><div class="chart-container" style="height: 260px;"><canvas id="tbBarChart"></canvas></div></div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card shadow-sm mt-3 mt-md-0">
+                    <div class="card-header"><h5 class="mb-0">Win% vs Top-N Opponents</h5></div>
+                    <div class="card-body"><div class="chart-container" style="height: 300px;"><canvas id="topnChart"></canvas></div></div>
                 </div>
             </div>
         </div>
     `;
-    
+
     $('#results').html(surfaceIndicator + keyStatsHtml + detailsHtml + chartHtml);
-    
-    // Create chart with fixed radar chart
-    const serveStats = ['1st_in%', '1st_win%', '2nd_win%', 'ace%'];
-    const p1Data = [];
-    const p2Data = [];
-    const labels = [];
-    
-    serveStats.forEach(stat => {
-        const statData = statsData.find(s => s.stat === stat);
-        if (statData) {
-            labels.push(formatStatName(stat));
-            p1Data.push(parseFloat(statData.player1_value) || 0);
-            p2Data.push(parseFloat(statData.player2_value) || 0);
-        }
-    });
-    
-    // Destroy existing chart if it exists
-    if (window.serveChart && window.serveChart instanceof Chart) {
-        window.serveChart.destroy();
-    }
-    
-    // Only create chart if we have data
-    if (labels.length > 0) {
+
+    // Destroy existing charts
+    [serveChart, holdBreakChart, tbBarChart, topnChart].forEach(ch => { if (ch && ch.destroy) ch.destroy(); });
+
+    // Serve radar
+    if (labels.length) {
         const ctx = document.getElementById('serveChart').getContext('2d');
-        window.serveChart = new Chart(ctx, {
+        serveChart = new Chart(ctx, {
             type: 'radar',
             data: {
-                labels: labels,
+                labels,
                 datasets: [{
-                    label: statsData[0].player1_name,
+                    label: player1,
                     data: p1Data,
-                    borderColor: 'rgb(30, 58, 138)',
-                    backgroundColor: 'rgba(30, 58, 138, 0.1)',
+                    borderColor: 'rgb(30,58,138)',
+                    backgroundColor: 'rgba(30,58,138,.1)',
                     borderWidth: 2,
-                    pointBackgroundColor: 'rgb(30, 58, 138)',
-                    pointBorderColor: '#fff',
-                    pointHoverBackgroundColor: '#fff',
-                    pointHoverBorderColor: 'rgb(30, 58, 138)'
-                }, {
-                    label: statsData[0].player2_name,
+                    pointBackgroundColor: 'rgb(30,58,138)'
+                },{
+                    label: player2,
                     data: p2Data,
-                    borderColor: 'rgb(16, 185, 129)',
-                    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                    borderColor: 'rgb(16,185,129)',
+                    backgroundColor: 'rgba(16,185,129,.1)',
                     borderWidth: 2,
-                    pointBackgroundColor: 'rgb(16, 185, 129)',
-                    pointBorderColor: '#fff',
-                    pointHoverBackgroundColor: '#fff',
-                    pointHoverBorderColor: 'rgb(16, 185, 129)'
+                    pointBackgroundColor: 'rgb(16,185,129)'
                 }]
             },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        position: 'top',
-                    }
-                },
-                scales: {
-                    r: {
-                        angleLines: {
-                            display: true
-                        },
-                        suggestedMin: 0,
-                        suggestedMax: 100,
-                        ticks: {
-                            stepSize: 20
-                        }
-                    }
-                }
-            }
+            options: { responsive: true, maintainAspectRatio: false, scales: { r: { suggestedMin: 0, suggestedMax: 100, ticks: { stepSize: 20 } } } }
+        });
+    }
+
+    // Hold/Break horizontal bar
+    {
+        const ctx = document.getElementById('holdBreakChart').getContext('2d');
+        holdBreakChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['Hold%', 'Break%'],
+                datasets: [{
+                    label: player1,
+                    data: [hold.p1 ?? 0, brk.p1 ?? 0],
+                    backgroundColor: 'rgba(30,58,138,.7)'
+                },{
+                    label: player2,
+                    data: [hold.p2 ?? 0, brk.p2 ?? 0],
+                    backgroundColor: 'rgba(16,185,129,.7)'
+                }]
+            },
+            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { min: 0, max: 100 } } }
+        });
+    }
+
+    // Tiebreak bar
+    {
+        const ctx = document.getElementById('tbBarChart').getContext('2d');
+        tbBarChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: ['TB win%'],
+                datasets: [{
+                    label: player1, data: [tb.p1 ?? 0], backgroundColor: 'rgba(30,58,138,.8)'},
+                {   label: player2, data: [tb.p2 ?? 0], backgroundColor: 'rgba(239,68,68,.8)'}
+                ]
+            },
+            options: { indexAxis: 'y', responsive: true, maintainAspectRatio: false, scales: { x: { min: 0, max: 100 } } }
+        });
+    }
+
+    // Top-N grouped bar
+    {
+        const ctx = document.getElementById('topnChart').getContext('2d');
+        const labelsTop = ['Top5','Top10','Top20','Top50','Top100'];
+        const dataP1 = [t5.p1||0, t10.p1||0, t20.p1||0, t50.p1||0, t100.p1||0];
+        const dataP2 = [t5.p2||0, t10.p2||0, t20.p2||0, t50.p2||0, t100.p2||0];
+        topnChart = new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: labelsTop,
+                datasets: [{
+                    label: player1, data: dataP1, backgroundColor: 'rgba(30,58,138,.8)'
+                },{
+                    label: player2, data: dataP2, backgroundColor: 'rgba(16,185,129,.8)'
+                }]
+            },
+            options: { responsive: true, maintainAspectRatio: false, scales: { y: { min:0, max: 100 } } }
         });
     }
 }
 
 $('#compareForm').on('submit', function(e) {
     e.preventDefault();
-    
     $('.loading').show();
     $('.error-message').hide();
     $('#results').empty();
     $('#surfaceFilter').hide();
-    
+
     $.ajax({
         url: '/compare',
         method: 'POST',
         data: $(this).serialize(),
         success: function(response) {
             $('.loading').hide();
-            
             allSurfacesData = response.all_surfaces_stats;
-            
-            // Build surface filter with only available surfaces
-            let surfaceFilterHtml = '';
-            const availableSurfaces = Object.keys(allSurfacesData).filter(surface => 
-                allSurfacesData[surface] && allSurfacesData[surface].length > 0
-            );
-            
-            availableSurfaces.forEach((surface, index) => {
-                surfaceFilterHtml += `
-                    <button type="button" class="btn btn-outline-primary ${index === 0 ? 'active' : ''}" 
-                            data-surface="${surface}">${surface}</button>
-                `;
-            });
-            
-            $('#surfaceFilter .btn-group').html(surfaceFilterHtml);
+
+            const available = Object.keys(allSurfacesData).filter(s => allSurfacesData[s] && allSurfacesData[s].length);
+            const btns = available.map((s, i) => `
+                <button type="button" class="btn btn-outline-primary ${i===0?'active':''}" data-surface="${s}">${s}</button>
+            `).join('');
+            $('#surfaceFilter .btn-group').html(btns);
             $('#surfaceFilter').show();
-            
-            // Display first available surface (usually 'All')
-            if (availableSurfaces.length > 0) {
-                displayComparison(availableSurfaces[0]);
-            }
+
+            if (available.length) displayComparison(available[0]);
         },
         error: function(xhr) {
             $('.loading').hide();

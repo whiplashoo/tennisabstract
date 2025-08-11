@@ -40,36 +40,36 @@
 {% block extra_js %}
 <script>
 function getSurfaceClass(surface) {
-    const surfaceMap = {
-        'Hard': 'surface-hard',
-        'Clay': 'surface-clay',
-        'Grass': 'surface-grass'
-    };
+    const surfaceMap = { 'Hard': 'surface-hard', 'Clay': 'surface-clay', 'Grass': 'surface-grass', 'Carpet': 'surface-hard' };
     return surfaceMap[surface] || 'surface-hard';
 }
 
+let h2hProgressChart = null, h2hSurfacesChart = null;
+
 $('#h2hForm').on('submit', function(e) {
     e.preventDefault();
-    
     $('.loading').show();
     $('.error-message').hide();
     $('#results').empty();
-    
+
     $.ajax({
         url: '/h2h',
         method: 'POST',
         data: $(this).serialize(),
         success: function(response) {
             $('.loading').hide();
-            
-            // Create summary section
+
+            const p1 = response.summary.player1;
+            const p2 = response.summary.player2;
+
+            // Hero summary
             let summaryHtml = `
                 <div class="hero-section text-center mb-4">
-                    <h3>${response.summary.player1} vs ${response.summary.player2}</h3>
+                    <h3>${p1} vs ${p2}</h3>
                     <div class="row mt-4">
                         <div class="col-md-4">
                             <div class="stat-value">${response.summary.p1_wins}</div>
-                            <div class="stat-label text-white-50">${response.summary.player1} Wins</div>
+                            <div class="stat-label text-white-50">${p1} Wins</div>
                         </div>
                         <div class="col-md-4">
                             <div class="stat-value">${response.summary.total_matches}</div>
@@ -77,13 +77,13 @@ $('#h2hForm').on('submit', function(e) {
                         </div>
                         <div class="col-md-4">
                             <div class="stat-value">${response.summary.p2_wins}</div>
-                            <div class="stat-label text-white-50">${response.summary.player2} Wins</div>
+                            <div class="stat-label text-white-50">${p2} Wins</div>
                         </div>
                     </div>
                 </div>
             `;
-            
-            // Create surface breakdown if available
+
+            // Surface breakdown tiles (if provided)
             if (response.summary.surface_breakdown) {
                 summaryHtml += '<div class="row mb-4">';
                 for (const [surface, data] of Object.entries(response.summary.surface_breakdown)) {
@@ -93,13 +93,13 @@ $('#h2hForm').on('submit', function(e) {
                                 <div class="stat-label">${surface} Court</div>
                                 <div class="d-flex justify-content-between mt-2">
                                     <div>
-                                        <span class="player1-value">${data[response.summary.player1] || 0}</span>
-                                        <small class="text-muted d-block">${response.summary.player1}</small>
+                                        <span class="player1-value">${data[p1] || 0}</span>
+                                        <small class="text-muted d-block">${p1}</small>
                                     </div>
                                     <div class="text-muted align-self-center">-</div>
                                     <div class="text-end">
-                                        <span class="player2-value">${data[response.summary.player2] || 0}</span>
-                                        <small class="text-muted d-block">${response.summary.player2}</small>
+                                        <span class="player2-value">${data[p2] || 0}</span>
+                                        <small class="text-muted d-block">${p2}</small>
                                     </div>
                                 </div>
                             </div>
@@ -108,18 +108,40 @@ $('#h2hForm').on('submit', function(e) {
                 }
                 summaryHtml += '</div>';
             }
-            
-            // Create matches list
+
+            // Charts section
+            let chartsHtml = `
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <div class="card shadow-sm">
+                            <div class="card-header"><h5 class="mb-0">Cumulative Wins Over Time</h5></div>
+                            <div class="card-body">
+                                <div class="chart-container" style="height: 320px;"><canvas id="h2hProgress"></canvas></div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="card shadow-sm">
+                            <div class="card-header"><h5 class="mb-0">Wins by Surface</h5></div>
+                            <div class="card-body">
+                                <div class="chart-container" style="height: 320px;"><canvas id="h2hSurfaces"></canvas></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Matches list
             let matchesHtml = `
-                <div class="card shadow-sm">
+                <div class="card shadow-sm mt-4">
                     <div class="card-header">
                         <h5 class="mb-0">Match History</h5>
                     </div>
                     <div class="card-body">
             `;
-            
-            response.matches.forEach((match, index) => {
-                const isP1Winner = match.winner_name === response.summary.player1;
+
+            response.matches.forEach((match) => {
+                const isP1Winner = match.winner_name === p1;
                 matchesHtml += `
                     <div class="match-card">
                         <div class="row align-items-center">
@@ -135,11 +157,11 @@ $('#h2hForm').on('submit', function(e) {
                             </div>
                             <div class="col-md-4 text-center">
                                 <div class="${isP1Winner ? 'player1-value' : 'text-muted'}">
-                                    ${response.summary.player1} ${isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
+                                    ${p1} ${isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
                                 </div>
                                 <div class="my-1"><strong>${match.score}</strong></div>
                                 <div class="${!isP1Winner ? 'player2-value' : 'text-muted'}">
-                                    ${response.summary.player2} ${!isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
+                                    ${p2} ${!isP1Winner ? '<i class="fas fa-trophy text-warning"></i>' : ''}
                                 </div>
                             </div>
                             <div class="col-md-3 text-end">
@@ -149,10 +171,59 @@ $('#h2hForm').on('submit', function(e) {
                     </div>
                 `;
             });
-            
             matchesHtml += '</div></div>';
-            
-            $('#results').html(summaryHtml + matchesHtml);
+
+            $('#results').html(summaryHtml + chartsHtml + matchesHtml);
+
+            // Build cumulative wins data
+            const byDate = [...response.matches].sort((a,b)=> new Date(a.match_date) - new Date(b.match_date));
+            let w1 = 0, w2 = 0;
+            const labels = [], s1 = [], s2 = [];
+            byDate.forEach(m => {
+                labels.push(m.match_date);
+                if (m.winner_name === p1) w1++; else if (m.winner_name === p2) w2++;
+                s1.push(w1); s2.push(w2);
+            });
+
+            // Destroy old charts if exist
+            [h2hProgressChart, h2hSurfacesChart].forEach(ch => { if (ch && ch.destroy) ch.destroy(); });
+
+            // Line chart
+            {
+                const ctx = document.getElementById('h2hProgress').getContext('2d');
+                h2hProgressChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [
+                            { label: p1, data: s1, borderColor: 'rgb(30,58,138)', backgroundColor: 'rgba(30,58,138,.1)', tension: .25 },
+                            { label: p2, data: s2, borderColor: 'rgb(239,68,68)', backgroundColor: 'rgba(239,68,68,.1)', tension: .25 }
+                        ]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false } }
+                });
+            }
+
+            // Wins by surface bar
+            {
+                const surfaces = ['Hard','Clay','Grass','Carpet'];
+                const b = response.summary.surface_breakdown || {};
+                const p1Arr = surfaces.map(s => (b[s] && b[s][p1]) ? b[s][p1] : 0);
+                const p2Arr = surfaces.map(s => (b[s] && b[s][p2]) ? b[s][p2] : 0);
+
+                const ctx = document.getElementById('h2hSurfaces').getContext('2d');
+                h2hSurfacesChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: surfaces,
+                        datasets: [
+                            { label: p1, data: p1Arr, backgroundColor: 'rgba(30,58,138,.8)' },
+                            { label: p2, data: p2Arr, backgroundColor: 'rgba(16,185,129,.8)' }
+                        ]
+                    },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, precision: 0 } } }
+                });
+            }
         },
         error: function(xhr) {
             $('.loading').hide();
