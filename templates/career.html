@@ -106,47 +106,19 @@ function displayYearStats(year, surface = null) {
 
     let statsHtml = surfaceIndicator + `
         <div class="row mb-4">
-            <div class="col-md-3">
-                <div class="stat-card text-center">
-                    <div class="stat-label">Win-Loss Record</div>
-                    <div class="stat-value">${displayData['W-L'] || 'N/A'}</div>
-                    <div class="text-muted">${displayData['win%'] || '0'}% Win Rate</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="stat-card text-center">
-                    <div class="stat-label">1st Serve %</div>
-                    <div class="stat-value">${displayData['1st_in%'] || 'N/A'}%</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="stat-card text-center">
-                    <div class="stat-label">1st Serve Win %</div>
-                    <div class="stat-value">${displayData['1st_win%'] || 'N/A'}%</div>
-                </div>
-            </div>
-            <div class="col-md-3">
-                <div class="stat-card text-center">
-                    <div class="stat-label">Break %</div>
-                    <div class="stat-value">${displayData['break%'] || 'N/A'}%</div>
-                </div>
-            </div>
+            <div class="col-md-3"><div class="stat-card text-center"><div class="stat-label">Win-Loss Record</div><div class="stat-value">${displayData['W-L'] || 'N/A'}</div><div class="text-muted">${displayData['win%'] || '0'}% Win Rate</div></div></div>
+            <div class="col-md-3"><div class="stat-card text-center"><div class="stat-label">1st Serve %</div><div class="stat-value">${displayData['1st_in%'] || 'N/A'}%</div></div></div>
+            <div class="col-md-3"><div class="stat-card text-center"><div class="stat-label">1st Serve Win %</div><div class="stat-value">${displayData['1st_win%'] || 'N/A'}%</div></div></div>
+            <div class="col-md-3"><div class="stat-card text-center"><div class="stat-label">Break %</div><div class="stat-value">${displayData['break%'] || 'N/A'}%</div></div></div>
         </div>
     `;
 
     if (careerData.recent_form && careerData.recent_form.matches && careerData.recent_form.matches.length > 0 && year === 'career') {
-        statsHtml += `
-            <div class="card shadow-sm mb-4">
-                <div class="card-header bg-light"><strong><i class="fas fa-history"></i> Recent Matches</strong></div>
-                <div class="card-body">${displayRecentMatches(careerData.recent_form.matches)}</div>
-            </div>
-        `;
+        statsHtml += `<div class="card shadow-sm mb-4"><div class="card-header bg-light"><strong><i class="fas fa-history"></i> Recent Matches</strong></div><div class="card-body">${displayRecentMatches(careerData.recent_form.matches)}</div></div>`;
     }
 
-    // *** MODIFICATION: Reverted to column layout with colored headers ***
     statsHtml += `
         <div class="row mb-4">
-            <!-- Serve Stats -->
             <div class="col-md-4">
                 <div class="card shadow-sm h-100">
                     <div class="card-header bg-primary text-white"><h6 class="mb-0"><i class="fas fa-bolt"></i> Serve Statistics</h6></div>
@@ -159,8 +131,6 @@ function displayYearStats(year, surface = null) {
                     </div>
                 </div>
             </div>
-
-            <!-- Games Stats -->
             <div class="col-md-4">
                 <div class="card shadow-sm h-100">
                     <div class="card-header bg-success text-white"><h6 class="mb-0"><i class="fas fa-gamepad"></i> Games Statistics</h6></div>
@@ -168,25 +138,22 @@ function displayYearStats(year, surface = null) {
                         <div class="stat-comparison-row"><div class="stat-name">Hold %</div><div class="stat-value-display">${displayData['hold%'] || 'N/A'}%</div></div>
                         <div class="stat-comparison-row"><div class="stat-name">Break Points Saved %</div><div class="stat-value-display">${displayData['bp_saved%'] || 'N/A'}%</div></div>
                         <div class="stat-comparison-row"><div class="stat-name">Break %</div><div class="stat-value-display">${displayData['break%'] || 'N/A'}%</div></div>
-                        <div class="stat-comparison-row">
-                            <div class="stat-name">Tiebreak</div>
-                            <div class="stat-value-display">${displayData['tb_W-L'] ? `${displayData['tb_W-L']} (${displayData['tb_win%'] || 'N/A'}%)` : displayData['tb_win%'] ? `${displayData['tb_win%']}%` : 'N/A'}</div>
-                        </div>
+                        <div class="stat-comparison-row"><div class="stat-name">Tiebreak</div><div class="stat-value-display">${displayData['tb_W-L'] ? `${displayData['tb_W-L']} (${displayData['tb_win%'] || 'N/A'}%)` : displayData['tb_win%'] ? `${displayData['tb_win%']}%` : 'N/A'}</div></div>
                     </div>
                 </div>
             </div>
-
-            <!-- Matches Stats -->
             <div class="col-md-4">
                 <div class="card shadow-sm h-100">
                     <div class="card-header bg-warning text-white"><h6 class="mb-0"><i class="fas fa-trophy"></i> Match Statistics</h6></div>
                     <div class="card-body">
-                        <div class="stat-comparison-row"><div class="stat-name">vs Top 5</div><div class="stat-value-display">${displayData['top5_win%'] ? displayData['top5_win%'] + '%' : 'N/A'}</div></div>
-                        <div class="stat-comparison-row"><div class="stat-name">vs Top 10</div><div class="stat-value-display">${displayData['top10_win%'] ? displayData['top10_win%'] + '%' : 'N/A'}</div></div>
-                        <div class="stat-comparison-row"><div class="stat-name">vs Top 20</div><div class="stat-value-display">${displayData['top20_win%'] ? displayData['top20_win%'] + '%' : 'N/A'}</div></div>
-                        <div class="stat-comparison-row"><div class="stat-name">vs Top 50</div><div class="stat-value-display">${displayData['top50_win%'] ? displayData['top50_win%'] + '%' : 'N/A'}</div></div>
-                        <div class="stat-comparison-row"><div class="stat-name">vs Top 100</div><div class="stat-value-display">${displayData['top100_win%'] ? displayData['top100_win%'] + '%' : 'N/A'}</div></div>
+                        <!-- *** MODIFICATION START *** -->
+                        <div class="stat-comparison-row"><div class="stat-name">vs Top 5</div><div class="stat-value-display">${displayData['top5_W-L'] ? `${displayData['top5_W-L']} (${displayData['top5_win%'] || 'N/A'}%)` : (displayData['top5_win%'] ? `${displayData['top5_win%']}%` : 'N/A')}</div></div>
+                        <div class="stat-comparison-row"><div class="stat-name">vs Top 10</div><div class="stat-value-display">${displayData['top10_W-L'] ? `${displayData['top10_W-L']} (${displayData['top10_win%'] || 'N/A'}%)` : (displayData['top10_win%'] ? `${displayData['top10_win%']}%` : 'N/A')}</div></div>
+                        <div class="stat-comparison-row"><div class="stat-name">vs Top 20</div><div class="stat-value-display">${displayData['top20_W-L'] ? `${displayData['top20_W-L']} (${displayData['top20_win%'] || 'N/A'}%)` : (displayData['top20_win%'] ? `${displayData['top20_win%']}%` : 'N/A')}</div></div>
+                        <div class="stat-comparison-row"><div class="stat-name">vs Top 50</div><div class="stat-value-display">${displayData['top50_W-L'] ? `${displayData['top50_W-L']} (${displayData['top50_win%'] || 'N/A'}%)` : (displayData['top50_win%'] ? `${displayData['top50_win%']}%` : 'N/A')}</div></div>
+                        <div class="stat-comparison-row"><div class="stat-name">vs Top 100</div><div class="stat-value-display">${displayData['top100_W-L'] ? `${displayData['top100_W-L']} (${displayData['top100_win%'] || 'N/A'}%)` : (displayData['top100_win%'] ? `${displayData['top100_win%']}%` : 'N/A')}</div></div>
                         <div class="stat-comparison-row"><div class="stat-name">Avg Opponent Rank</div><div class="stat-value-display">${displayData['avg_opp_rank'] || 'N/A'}</div></div>
+                        <!-- *** MODIFICATION END *** -->
                     </div>
                 </div>
             </div>

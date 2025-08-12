@@ -20,6 +20,7 @@
                 <div class="col-md-4 mb-3">
                     <label for="year" class="form-label">Year</label>
                     <select class="form-control" id="year" name="year">
+                        <option value="career">Career</option>
                         {% for year in range(current_year, 1999, -1) %}
                         <option value="{{ year }}" {% if year == current_year %}selected{% endif %}>
                             {{ year }}
@@ -28,7 +29,7 @@
                     </select>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary">
+            <button type="submit" class="btn btn-primary w-100">
                 <i class="fas fa-chart-bar"></i> Compare Players
             </button>
         </form>
@@ -57,14 +58,14 @@ let allSurfacesData = null;
 let currentSurface = 'All';
 let performanceChart = null;
 
-// Helper: better stat direction
+// Helper: determine if val1 is better than val2 for a given stat
 function isBetterValue(stat, val1, val2) {
     const lowerIsBetter = ['df%', 'losses', 'avg_opp_rank'];
-    if (lowerIsBetter.includes(stat)) return (parseFloat(val1) || 0) < (parseFloat(val2) || 0);
+    if (lowerIsBetter.includes(stat)) return (parseFloat(val1) || Infinity) < (parseFloat(val2) || Infinity);
     return (parseFloat(val1) || 0) > (parseFloat(val2) || 0);
 }
 
-// Helper: friendly labels
+// Helper: create friendly display labels for stats
 function formatStatName(stat) {
     const statNames = {
         'W-L': 'Win-Loss Record',
@@ -78,14 +79,13 @@ function formatStatName(stat) {
         'hold%': 'Service Hold %',
         'break%': 'Break Percentage',
         'avg_opp_rank': 'Avg Opponent Rank',
-        'matches_with_stats%': 'Matches with Stats %',
         'tb_W-L': 'Tiebreak W-L',
         'tb_win%': 'Tiebreak Win %',
-        'top5_win%': 'Win% vs Top 5',
-        'top10_win%': 'Win% vs Top 10',
-        'top20_win%': 'Win% vs Top 20',
-        'top50_win%': 'Win% vs Top 50',
-        'top100_win%': 'Win% vs Top 100'
+        'top5_win%': 'vs Top 5',
+        'top10_win%': 'vs Top 10',
+        'top20_win%': 'vs Top 20',
+        'top50_win%': 'vs Top 50',
+        'top100_win%': 'vs Top 100'
     };
     return statNames[stat] || stat;
 }
@@ -100,270 +100,116 @@ $(document).on('click', '#surfaceFilter button', function() {
 
 function getStat(statsData, key) {
     const row = statsData.find(s => s.stat === key);
-    if (!row) return { p1: null, p2: null, names: null };
+    if (!row) return { p1: null, p2: null, p1_raw: 'N/A', p2_raw: 'N/A' };
     return {
         p1: parseFloat(row.player1_value) || 0,
         p2: parseFloat(row.player2_value) || 0,
         p1_raw: row.player1_value,
-        p2_raw: row.player2_value,
-        names: { p1: row.player1_name, p2: row.player2_name }
+        p2_raw: row.player2_value
     };
 }
 
 function displayComparison(surface) {
     const statsData = allSurfacesData[surface];
     if (!statsData || !statsData.length) {
-        $('#results').html(`
-            <div class="alert alert-warning">
-                No data available for ${surface} surface in the selected year.
-            </div>
-        `);
+        $('#results').html(`<div class="alert alert-warning">No data available for ${surface} surface in the selected year.</div>`);
         return;
     }
 
     const player1 = statsData[0].player1_name;
     const player2 = statsData[0].player2_name;
 
-    let surfaceIndicator = '';
-    if (surface !== 'All') {
-        surfaceIndicator = `<div class="alert alert-info mb-3">
-            <i class="fas fa-filter"></i> Showing statistics for <strong>${surface}</strong> court only
-        </div>`;
-    }
+    let surfaceIndicator = (surface !== 'All') ? `<div class="alert alert-info mb-3"><i class="fas fa-filter"></i> Showing statistics for <strong>${surface}</strong> court only</div>` : '';
 
-    // Overview cards with W-L and win%
     const wlStat = getStat(statsData, 'W-L');
     const winPctStat = getStat(statsData, 'win%');
     
     let overviewHtml = `
         <div class="row mb-4">
-            <div class="col-md-6">
-                <div class="stat-card">
-                    <h5 class="text-primary mb-3">${player1}</h5>
-                    <div class="d-flex justify-content-between mb-2">
-                        <span class="stat-label">Record</span>
-                        <span class="stat-value">${wlStat.p1_raw || 'N/A'}</span>
-                    </div>
-                    <div class="d-flex justify-content-between">
-                        <span class="stat-label">Win %</span>
-                        <span class="stat-value">${winPctStat.p1_raw || 'N/A'}%</span>
-                    </div>
-                </div>
-            </div>
-            <div class="col-md-6">
-                <div class="stat-card">
-                    <h5 class="text-success mb-3">${player2}</h5>
-                    <div class="d-flex justify-content-between mb-2">
-                        <span class="stat-label">Record</span>
-                        <span class="stat-value">${wlStat.p2_raw || 'N/A'}</span>
-                    </div>
-                    <div class="d-flex justify-content-between">
-                        <span class="stat-label">Win %</span>
-                        <span class="stat-value">${winPctStat.p2_raw || 'N/A'}%</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
+            <div class="col-md-6"><div class="stat-card"><h5 class="text-primary mb-3">${player1}</h5><div class="d-flex justify-content-between mb-2"><span class="stat-label">Record</span><span class="stat-value">${wlStat.p1_raw || 'N/A'}</span></div><div class="d-flex justify-content-between"><span class="stat-label">Win %</span><span class="stat-value">${winPctStat.p1_raw || 'N/A'}%</span></div></div></div>
+            <div class="col-md-6"><div class="stat-card"><h5 class="text-success mb-3">${player2}</h5><div class="d-flex justify-content-between mb-2"><span class="stat-label">Record</span><span class="stat-value">${wlStat.p2_raw || 'N/A'}</span></div><div class="d-flex justify-content-between"><span class="stat-label">Win %</span><span class="stat-value">${winPctStat.p2_raw || 'N/A'}%</span></div></div></div>
+        </div>`;
 
-    // Detailed stats in three columns
-    let detailsHtml = `
-        <div class="row mb-4">
-            <!-- Serve Stats -->
-            <div class="col-md-4">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-primary text-white">
-                        <h6 class="mb-0"><i class="fas fa-bolt"></i> Serve Statistics</h6>
-                    </div>
-                    <div class="card-body">
-    `;
+    let detailsHtml = `<div class="row mb-4">`;
     
+    // --- Serve Stats ---
+    detailsHtml += `<div class="col-md-4"><div class="card shadow-sm h-100"><div class="card-header bg-primary text-white"><h6 class="mb-0"><i class="fas fa-bolt"></i> Serve Statistics</h6></div><div class="card-body">`;
     const serveStats = ['1st_in%', '1st_win%', '2nd_win%', 'ace%', 'df%'];
     serveStats.forEach(stat => {
         const row = statsData.find(s => s.stat === stat);
         if (row) {
             const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
-            detailsHtml += `
-                <div class="stat-comparison-row">
-                    <div class="stat-name">${formatStatName(stat)}</div>
-                    <div class="stat-values">
-                        <span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}</span>
-                        <span class="vs-separator">vs</span>
-                        <span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}</span>
-                    </div>
-                </div>
-            `;
+            detailsHtml += `<div class="stat-comparison-row"><div class="stat-name">${formatStatName(stat)}</div><div class="stat-values"><span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}%</span><span class="vs-separator">vs</span><span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}%</span></div></div>`;
         }
     });
-    
-    detailsHtml += `
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Games Stats -->
-            <div class="col-md-4">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-success text-white">
-                        <h6 class="mb-0"><i class="fas fa-gamepad"></i> Games Statistics</h6>
-                    </div>
-                    <div class="card-body">
-    `;
-    
-    // In the Games Stats section, replace the tiebreak line with:
+    detailsHtml += `</div></div></div>`;
+
+    // --- Games Stats ---
+    detailsHtml += `<div class="col-md-4"><div class="card shadow-sm h-100"><div class="card-header bg-success text-white"><h6 class="mb-0"><i class="fas fa-gamepad"></i> Games Statistics</h6></div><div class="card-body">`;
     const gameStats = ['hold%', 'bp_saved%', 'break%', 'tb_win%'];
     gameStats.forEach(stat => {
         const row = statsData.find(s => s.stat === stat);
         if (row) {
             const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
-            
-            // Special handling for tiebreak to show both W-L and %
+            let p1Display, p2Display;
             if (stat === 'tb_win%') {
                 const tbWL = statsData.find(s => s.stat === 'tb_W-L');
-                const p1Display = tbWL && tbWL.player1_value ? 
-                    `${tbWL.player1_value} (${row.player1_value || 'N/A'})` : 
-                    row.player1_value || 'N/A';
-                const p2Display = tbWL && tbWL.player2_value ? 
-                    `${tbWL.player2_value} (${row.player2_value || 'N/A'})` : 
-                    row.player2_value || 'N/A';
-                
-                detailsHtml += `
-                    <div class="stat-comparison-row">
-                        <div class="stat-name">Tiebreak</div>
-                        <div class="stat-values">
-                            <span class="player1-value ${p1Better ? 'better' : ''}">${p1Display}</span>
-                            <span class="vs-separator">vs</span>
-                            <span class="player2-value ${!p1Better ? 'better' : ''}">${p2Display}</span>
-                        </div>
-                    </div>
-                `;
+                p1Display = tbWL && tbWL.player1_value ? `${tbWL.player1_value} (${row.player1_value || 'N/A'}%)` : (row.player1_value ? `${row.player1_value}%` : 'N/A');
+                p2Display = tbWL && tbWL.player2_value ? `${tbWL.player2_value} (${row.player2_value || 'N/A'}%)` : (row.player2_value ? `${row.player2_value}%` : 'N/A');
+                detailsHtml += `<div class="stat-comparison-row"><div class="stat-name">Tiebreak</div><div class="stat-values"><span class="player1-value ${p1Better ? 'better' : ''}">${p1Display}</span><span class="vs-separator">vs</span><span class="player2-value ${!p1Better ? 'better' : ''}">${p2Display}</span></div></div>`;
             } else {
-                detailsHtml += `
-                    <div class="stat-comparison-row">
-                        <div class="stat-name">${stat === 'hold%' ? 'Hold %' : 
-                                            stat === 'bp_saved%' ? 'Break Points Saved %' :
-                                            'Break %'}</div>
-                        <div class="stat-values">
-                            <span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}</span>
-                            <span class="vs-separator">vs</span>
-                            <span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}</span>
-                        </div>
-                    </div>
-                `;
+                detailsHtml += `<div class="stat-comparison-row"><div class="stat-name">${formatStatName(stat)}</div><div class="stat-values"><span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}%</span><span class="vs-separator">vs</span><span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}%</span></div></div>`;
             }
         }
     });
+    detailsHtml += `</div></div></div>`;
 
-    
-    detailsHtml += `
-                    </div>
-                </div>
-            </div>
-            
-            <!-- Match Stats -->
-            <div class="col-md-4">
-                <div class="card shadow-sm h-100">
-                    <div class="card-header bg-warning text-white">
-                        <h6 class="mb-0"><i class="fas fa-trophy"></i> Match Statistics</h6>
-                    </div>
-                    <div class="card-body">
-    `;
-    
+    // --- Match Stats ---
+    detailsHtml += `<div class="col-md-4"><div class="card shadow-sm h-100"><div class="card-header bg-warning text-white"><h6 class="mb-0"><i class="fas fa-trophy"></i> Match Statistics</h6></div><div class="card-body">`;
     const matchStats = ['top5_win%', 'top10_win%', 'top20_win%', 'top50_win%', 'top100_win%', 'avg_opp_rank'];
     matchStats.forEach(stat => {
         const row = statsData.find(s => s.stat === stat);
         if (row) {
             const p1Better = isBetterValue(stat, row.player1_value, row.player2_value);
-            const label = stat === 'avg_opp_rank' ? 'Avg Opponent Rank' : 
-                         stat.replace('_win%', '').replace('top', 'vs Top ');
-            detailsHtml += `
-                <div class="stat-comparison-row">
-                    <div class="stat-name">${label}</div>
-                    <div class="stat-values">
-                        <span class="player1-value ${p1Better ? 'better' : ''}">${row.player1_value || 'N/A'}</span>
-                        <span class="vs-separator">vs</span>
-                        <span class="player2-value ${!p1Better ? 'better' : ''}">${row.player2_value || 'N/A'}</span>
-                    </div>
-                </div>
-            `;
+            let p1Display, p2Display;
+            if (stat.startsWith('top') && stat.endsWith('_win%')) {
+                const wlRow = statsData.find(s => s.stat === stat.replace('_win%', '_W-L'));
+                p1Display = wlRow && wlRow.player1_value ? `${wlRow.player1_value} (${row.player1_value || 'N/A'}%)` : (row.player1_value ? `${row.player1_value}%` : 'N/A');
+                p2Display = wlRow && wlRow.player2_value ? `${wlRow.player2_value} (${row.player2_value || 'N/A'}%)` : (row.player2_value ? `${row.player2_value}%` : 'N/A');
+            } else { // For avg_opp_rank
+                p1Display = row.player1_value || 'N/A';
+                p2Display = row.player2_value || 'N/A';
+            }
+            detailsHtml += `<div class="stat-comparison-row"><div class="stat-name">${formatStatName(stat)}</div><div class="stat-values"><span class="player1-value ${p1Better ? 'better' : ''}">${p1Display}</span><span class="vs-separator">vs</span><span class="player2-value ${!p1Better ? 'better' : ''}">${p2Display}</span></div></div>`;
         }
     });
-    
-    detailsHtml += `
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
+    detailsHtml += `</div></div></div></div>`;
 
-    // Performance comparison chart
+    // --- Performance Chart (MODIFIED) ---
     const winPct = getStat(statsData, 'win%');
     const hold = getStat(statsData, 'hold%');
     const brk = getStat(statsData, 'break%');
-
-    let chartHtml = `
-        <div class="card shadow-sm mt-4">
-            <div class="card-header">
-                <h5 class="mb-0">Performance Comparison</h5>
-            </div>
-            <div class="card-body">
-                <div class="chart-container" style="height: 400px;">
-                    <canvas id="performanceChart"></canvas>
-                </div>
-            </div>
-        </div>
-    `;
-
+    let chartHtml = `<div class="card shadow-sm mt-4">
+                    <div class="card-header bg-dark text-white"><strong><i class="fas fa-chart-line"></i> Performance Trend</strong></div><div class="card-body"><div class="chart-container" style="height: 400px;"><canvas id="performanceChart"></canvas></div></div></div>`;
     $('#results').html(surfaceIndicator + overviewHtml + detailsHtml + chartHtml);
 
-    // Destroy existing chart
-    if (performanceChart && performanceChart.destroy) performanceChart.destroy();
-
-    // Create performance comparison chart
-    const ctx = document.getElementById('performanceChart').getContext('2d');
-    performanceChart = new Chart(ctx, {
+    if (performanceChart) performanceChart.destroy();
+    performanceChart = new Chart(document.getElementById('performanceChart').getContext('2d'), {
         type: 'bar',
         data: {
             labels: ['Win %', 'Hold %', 'Break %'],
             datasets: [{
-                label: player1,
-                data: [winPct.p1 || 0, hold.p1 || 0, brk.p1 || 0],
-                backgroundColor: 'rgba(30,58,138,.7)',
-                borderColor: 'rgb(30,58,138)',
-                borderWidth: 1
+                label: player1, data: [winPct.p1, hold.p1, brk.p1],
+                backgroundColor: 'rgba(30,58,138,.7)', borderColor: 'rgb(30,58,138)', borderWidth: 1
             }, {
-                label: player2,
-                data: [winPct.p2 || 0, hold.p2 || 0, brk.p2 || 0],
-                backgroundColor: 'rgba(16,185,129,.7)',
-                borderColor: 'rgb(16,185,129)',
-                borderWidth: 1
+                label: player2, data: [winPct.p2, hold.p2, brk.p2],
+                backgroundColor: 'rgba(16,185,129,.7)', borderColor: 'rgb(16,185,129)', borderWidth: 1
             }]
         },
         options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                y: {
-                    beginAtZero: true,
-                    max: 100,
-                    title: {
-                        display: true,
-                        text: 'Percentage (%)'
-                    }
-                }
-            },
-            plugins: {
-                legend: {
-                    position: 'top'
-                },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return context.dataset.label + ': ' + context.parsed.y.toFixed(1) + '%';
-                        }
-                    }
-                }
-            }
+            responsive: true, maintainAspectRatio: false,
+            scales: { y: { beginAtZero: true, max: 100, title: { display: true, text: 'Percentage (%)' } } },
+            plugins: { legend: { position: 'top' }, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(1)}%` } } }
         }
     });
 }
@@ -382,17 +228,15 @@ $('#compareForm').on('submit', function(e) {
         success: function(response) {
             $('.loading').hide();
             allSurfacesData = response.all_surfaces_stats;
-
             const available = Object.keys(allSurfacesData).filter(s => allSurfacesData[s] && allSurfacesData[s].length);
-            const btns = available.map((s, i) => `
-                <button type="button" class="btn btn-outline-primary ${i===0?'active':''}" data-surface="${s}">${s}</button>
-            `).join('');
-            $('#surfaceFilter .btn-group').html(btns);
-            $('#surfaceFilter').show();
-
             if (available.length) {
+                const btns = available.map((s, i) => `<button type="button" class="btn btn-outline-primary ${i===0?'active':''}" data-surface="${s}">${s}</button>`).join('');
+                $('#surfaceFilter .btn-group').html(btns);
+                $('#surfaceFilter').show();
                 currentSurface = available[0];
                 displayComparison(currentSurface);
+            } else {
+                $('#results').html('<div class="alert alert-warning">No comparison data found for the selected players and year.</div>');
             }
         },
         error: function(xhr) {
