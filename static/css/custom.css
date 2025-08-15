@@ -232,3 +232,29 @@ body {
     .hero-section .stat-value { font-size: 2rem; }
     .chart-container { height: 250px !important; }
 }
+
+/* Players tables consistency */
+.players-card .card-header {
+    min-height: 52px;
+    display: flex;
+    align-items: center;
+}
+.players-table thead th {
+    font-weight: 600;
+    color: #374151;
+    background: #f9fafb;
+    border-bottom: 1px solid #e5e7eb;
+}
+.players-table .col-rank { width: 90px; }
+.players-table .col-player { min-width: 180px; }
+.players-table .col-nat { width: 90px; }
+.players-table .col-age { width: 110px; }
+.players-table td, .players-table th {
+    vertical-align: middle;
+}
+.players-table td.text-end, .players-table th.text-end {
+    text-align: right !important;
+}
+.players-table td.text-center, .players-table th.text-center {
+    text-align: center !important;
+}

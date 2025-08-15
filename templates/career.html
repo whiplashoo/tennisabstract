@@ -294,4 +294,19 @@ function updateTrendChart(surface) {
 }
 function _stripPct(val) { if (val === null || val === undefined) return null; const num = parseFloat(val); return isFinite(num) ? num : null; }
 </script>
+<script>
+// Auto-fill and submit if ?player= is present (normalize non-breaking spaces)
+$(function(){
+    try {
+        const params = new URLSearchParams(window.location.search);
+        const p = params.get('player');
+        if (p) {
+            const cleaned = p.replace(/\u00A0/g, ' ').replace(/\s+/g, ' ').trim();
+            $('#player').val(cleaned);
+            // auto-submit so results load immediately
+            $('#careerForm').trigger('submit');
+        }
+    } catch (e) {}
+});
+</script>
 {% endblock %}

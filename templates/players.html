@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+
+{% block title %}Players Directory - Tennis Ball Knowledge{% endblock %}
+
+{% block content %}
+<h2 class="mb-4">Players Directory</h2>
+
+<div class="row">
+  <!-- ATP Table -->
+  <div class="col-lg-6 mb-4">
+    <div class="card shadow-sm players-card">
+      <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+        <strong>ATP Rankings</strong>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table id="atpTable" class="table table-striped table-hover align-middle players-table">
+            <thead>
+              <tr>
+                <th class="col-rank text-end">Rank</th>
+                <th class="col-player">Player</th>
+                <th class="col-nat text-center">Nat</th>
+                <th class="col-age text-end">Age</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in atp_players %}
+              <tr>
+                <td class="text-end">{{ p.rank }}</td>
+                <td>
+                  <a href="{{ url_for('career_stats', player=p.name) }}" class="text-decoration-none">
+                    {{ p.name }}
+                  </a>
+                </td>
+                <td class="text-center">{{ p.country or '-' }}</td>
+                <td class="text-end" title="{{ p.birthdate or '' }}">
+                  {% if p.age is not none %}
+                    {{ "%.1f"|format(p.age) }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- WTA Table -->
+  <div class="col-lg-6 mb-4">
+    <div class="card shadow-sm players-card">
+      <div class="card-header bg-success text-white d-flex justify-content-between align-items-center">
+        <strong>WTA Rankings</strong>
+      </div>
+      <div class="card-body">
+        <div class="table-responsive">
+          <table id="wtaTable" class="table table-striped table-hover align-middle players-table">
+            <thead>
+              <tr>
+                <th class="col-rank text-end">Rank</th>
+                <th class="col-player">Player</th>
+                <th class="col-nat text-center">Nat</th>
+                <th class="col-age text-end">Age</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in wta_players %}
+              <tr>
+                <td class="text-end">{{ p.rank }}</td>
+                <td>
+                  <a href="{{ url_for('career_stats', player=p.name) }}" class="text-decoration-none">
+                    {{ p.name }}
+                  </a>
+                </td>
+                <td class="text-center">{{ p.country or '-' }}</td>
+                <td class="text-end" title="{{ p.birthdate or '' }}">
+                  {% if p.age is not none %}
+                    {{ "%.1f"|format(p.age) }}
+                  {% else %}
+                    -
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+$(function(){
+  if ($.fn.DataTable) {
+    function initPlayersTable(sel){
+      $(sel).DataTable({
+        pageLength: 18,
+        order: [[0, 'asc']],  // Sort by rank ascending
+        lengthChange: false,
+        autoWidth: false,
+        columnDefs: [
+          { targets: [0, 3], type: 'num', className: 'dt-body-right' }, // Rank & Age numeric/right-aligned
+          { targets: [2], className: 'dt-body-center' }                  // Nat center
+        ],
+        language: { search: 'Filter:' },
+        // Each table maintains its own state independently
+        stateSave: false,
+        // Ensure tables don't interfere with each other
+        drawCallback: function() {
+          // No cross-table synchronization
+        }
+      });
+    }
+    
+    // Initialize tables independently
+    initPlayersTable('#atpTable');
+    initPlayersTable('#wtaTable');
+  }
+});
+</script>
+{% endblock %}

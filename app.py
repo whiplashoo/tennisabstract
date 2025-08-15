@@ -7,7 +7,9 @@ from mod import (
     calculate_career_stats, 
     calculate_recent_form,
     format_h2h_matches,
-    career
+    career,
+    get_players,
+    suggest_players
 )
 import json
 from datetime import datetime, date
@@ -54,6 +56,64 @@ def dataframe_to_dict(df):
 @app.route('/')
 def index():
     return render_template('index.html')
+
+@app.route('/players', methods=['GET'])
+def players():
+    try:
+        all_players = get_players(tour=None)
+        atp_players = all_players.get('ATP', [])
+        wta_players = all_players.get('WTA', [])
+        return render_template('players.html', atp_players=atp_players, wta_players=wta_players)
+    except Exception as e:
+        logging.exception(f"/players error: {e}")
+        return render_template('players.html', atp_players=[], wta_players=[])
+
+@app.route('/api/players', methods=['GET'])
+def players_api():
+    tour = request.args.get('tour')
+    try:
+        def transform(p, default_tour=None):
+            return {
+                'rank': to_py(p.get('rank')),
+                'name': to_py(p.get('name')),
+                'tour': p.get('tour', default_tour),
+                'country': p.get('country'),
+                'birthdate': p.get('birthdate'),
+                'age': round(p.get('age'), 1) if p.get('age') is not None else None,  # Round to 1 decimal
+            }
+        
+        if tour:
+            tour = tour.upper()
+            if tour not in ('ATP', 'WTA'):
+                return jsonify({'error': "Invalid tour; must be 'ATP' or 'WTA'"}), 400
+            lst = get_players(tour=tour)
+            return jsonify({'players': [transform(p, default_tour=tour) for p in lst]})
+        else:
+            all_players = get_players(tour=None)
+            return jsonify({
+                'ATP': [transform(p, default_tour='ATP') for p in all_players.get('ATP', [])],
+                'WTA': [transform(p, default_tour='WTA') for p in all_players.get('WTA', [])]
+            })
+    except Exception as e:
+        logging.exception(f"/api/players error: {e}")
+        return jsonify({'error': 'Failed to load players'}), 500
+
+@app.route('/api/player-suggest', methods=['GET'])
+def player_suggest():
+    q = request.args.get('q', '').strip()
+    if not q or len(q) < 2:
+        return jsonify({'suggestions': []})
+    try:
+        try:
+            limit = int(request.args.get('limit', 10))
+        except Exception:
+            limit = 10
+        tour = request.args.get('tour')
+        suggestions = suggest_players(q, limit=limit, tour=tour)
+        return jsonify({'suggestions': [{'label': to_py(s.get('label')), 'value': to_py(s.get('value')), 'tour': s.get('tour')} for s in suggestions]})
+    except Exception as e:
+        logging.exception(f"/api/player-suggest error: {e}")
+        return jsonify({'suggestions': []}), 500
 
 @app.route('/compare', methods=['GET', 'POST'])
 def compare_players():

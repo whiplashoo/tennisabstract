@@ -1,3 +1,4 @@
+import unicodedata
 import requests
 from bs4 import BeautifulSoup
 import pandas as pd
@@ -8,10 +9,10 @@ import numpy as np
 import re
 import ast
 from functools import lru_cache
-from datetime import datetime, timedelta
+from datetime import datetime, date as dt_date
 import pickle
 import os
-from config import (BASE_URL, REQUEST_DELAY, REQUEST_RETRIES,
+from config import (BASE_URL,TA_REPORTS_BASE, REQUEST_DELAY, REQUEST_RETRIES,
                     CACHE_EXPIRE_HOURS, DATABASE_PATH)
 from database import TennisDatabase
 
@@ -63,6 +64,322 @@ def _count_tb_oriented(score: str, wl_flag: str) -> tuple[int, int]:
             tb_lost += 1
     return tb_won, tb_lost
 
+class TennisPlayersDirectory:
+    """
+    Fetch current ATP/WTA rankings from Tennis Abstract reports pages,
+    cache them on disk, and serve suggestions for autocomplete.
+    """
+    
+    def __init__(self, session: requests.Session | None = None, cache_expire_hours: int | None = None):
+        self.session = session or requests.Session()
+        self.cache_expire_hours = cache_expire_hours or CACHE_EXPIRE_HOURS
+        
+        # Cache file placed next to the database path if possible
+        try:
+            cache_dir = os.path.dirname(DATABASE_PATH) if DATABASE_PATH else os.path.dirname(__file__)
+            if not cache_dir:
+                cache_dir = "."
+            os.makedirs(cache_dir, exist_ok=True)
+            self.cache_path = os.path.join(cache_dir, "players_cache.pkl")
+        except Exception:
+            self.cache_path = os.path.join(os.path.dirname(__file__), "players_cache.pkl")
+
+    def _now(self) -> float:
+        return time.time()
+    @staticmethod
+    def _normalize(s: str) -> str:
+        if not isinstance(s, str):
+            return ""
+        s = unicodedata.normalize("NFKD", s)
+        s = "".join(c for c in s if not unicodedata.combining(c))
+        s = s.replace("\u00A0", " ")
+        s = re.sub(r"\s+", " ", s).strip()
+        return s
+    @staticmethod
+    def _canon_header(s: str) -> str:
+        s = (s or "").replace("\u00A0", " ")
+        s = re.sub(r"\s+", " ", s).strip().lower()
+        return re.sub(r"[^a-z0-9]+", "", s)
+
+    def _parse_date(self, text: str) -> datetime | None:
+        if not text:
+            return None
+        s = self._normalize(text)
+        # Prefer ISO if present
+        for key in ("data-sort", "data-order"):
+            if isinstance(text, dict) and text.get(key):
+                s = self._normalize(text.get(key))
+                break
+        # Try common formats
+        for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%B-%Y", "%d/%m/%Y", "%m/%d/%Y", "%Y.%m.%d", "%d %b %Y", "%d %B %Y"):
+            try:
+                return datetime.strptime(s, fmt)
+            except Exception:
+                pass
+        # Fallback: find yyyy-mm-dd within
+        m = re.search(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
+        if m:
+            try:
+                return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _compute_age(born: datetime | None) -> float | None:
+        """Compute age with decimal precision (e.g., 23.4 years)"""
+        if not born:
+            return None
+        today = dt_date.today()
+        b = born.date()
+        
+        # Calculate years as a decimal
+        years = today.year - b.year
+        
+        # Calculate the fraction of the year
+        # Get the birthday this year
+        try:
+            birthday_this_year = dt_date(today.year, b.month, b.day)
+        except ValueError:
+            # Handle leap year edge case (Feb 29)
+            birthday_this_year = dt_date(today.year, b.month, 28)
+        
+        if today >= birthday_this_year:
+            # Birthday has passed this year
+            days_since_birthday = (today - birthday_this_year).days
+            days_in_year = 366 if today.year % 4 == 0 and (today.year % 100 != 0 or today.year % 400 == 0) else 365
+            fraction = days_since_birthday / days_in_year
+        else:
+            # Birthday hasn't passed yet
+            years -= 1
+            try:
+                birthday_last_year = dt_date(today.year - 1, b.month, b.day)
+            except ValueError:
+                # Handle leap year edge case
+                birthday_last_year = dt_date(today.year - 1, b.month, 28)
+            days_since_birthday = (today - birthday_last_year).days
+            days_in_last_year = 366 if (today.year - 1) % 4 == 0 and ((today.year - 1) % 100 != 0 or (today.year - 1) % 400 == 0) else 365
+            fraction = days_since_birthday / days_in_last_year
+        
+        age = years + fraction
+        return round(age, 1)  # Round to 1 decimal place
+
+    def _is_cache_valid(self, cache_obj: dict) -> bool:
+        try:
+            expires_at = cache_obj.get("expires_at")
+            return bool(expires_at and self._now() < float(expires_at))
+        except Exception:
+            return False
+
+    def _load_cache(self) -> dict | None:
+        if not os.path.exists(self.cache_path):
+            return None
+        try:
+            with open(self.cache_path, "rb") as f:
+                obj = pickle.load(f)
+            if isinstance(obj, dict):
+                return obj
+        except Exception as e:
+            logging.warning(f"Failed to load players cache: {e}")
+        return None
+
+    def _save_cache(self, data: dict) -> None:
+        try:
+            with open(self.cache_path, "wb") as f:
+                pickle.dump(data, f)
+        except Exception as e:
+            logging.warning(f"Failed to save players cache: {e}")
+
+    def _fetch_rankings_html(self, tour: str) -> str:
+        tour = (tour or "").upper()
+        if tour not in ("ATP", "WTA"):
+            raise ValueError("tour must be 'ATP' or 'WTA'")
+        url = f"{TA_REPORTS_BASE}/{'atp' if tour=='ATP' else 'wta'}Rankings.html"
+        try:
+            resp = scraper._make_request(url)
+        except Exception:
+            resp = self.session.get(url, timeout=15)
+            resp.raise_for_status()
+        return resp.text
+
+    @staticmethod
+    def _extract_country_code(td) -> str | None:
+        # try flag alt/title first
+        img = td.find("img") if hasattr(td, "find") else None
+        if img and (img.get("alt") or img.get("title")):
+            alt = (img.get("alt") or img.get("title") or "").strip().upper()
+            m = re.search(r"\b([A-Z]{3})\b", alt)
+            if m:
+                return m.group(1)
+        # fallback to text
+        text = ""
+        try:
+            text = td.get_text(" ", strip=True)
+        except Exception:
+            text = str(td) if td else ""
+        text = (text or "").replace("\u00A0", " ")
+        text = re.sub(r"\s+", " ", text).strip().upper()
+        m = re.search(r"\b([A-Z]{3})\b", text)
+        if m:
+            return m.group(1)
+        m2 = re.search(r"\b([A-Z]{2})\b", text)
+        if m2:
+            return m2.group(1)
+        return None
+
+    def _parse_players(self, html: str, tour: str) -> list[dict]:
+        """
+        Parse rankings table; extract rank, player name, country (3-letter code), birthdate if present, and age with decimal precision.
+        """
+        try:
+            soup = BeautifulSoup(html, "html.parser")
+            tables = soup.find_all("table")
+            target = None
+            headers = []
+            for tbl in tables:
+                ths = tbl.find_all("th")
+                if not ths:
+                    continue
+                labels = [th.get_text(" ", strip=True) for th in ths]
+                canon = [self._canon_header(x) for x in labels]
+                if any("rank" in h or h == "rk" for h in canon) and any("player" in h or "name" in h for h in canon):
+                    target = tbl
+                    headers = labels
+                    break
+            if target is None and tables:
+                target = tables[0]
+                headers = [th.get_text(" ", strip=True) for th in target.find_all("th")]
+
+            if target is None:
+                logging.warning("No table found on rankings page.")
+                return []
+
+            canon_headers = [self._canon_header(h) for h in headers]
+            # locate columns
+            def find_idx(*keys):
+                for k in keys:
+                    for i, h in enumerate(canon_headers):
+                        if k in h:
+                            return i
+                return None
+
+            idx_rank = find_idx("rank", "rk")
+            idx_name = find_idx("player", "name")
+            idx_nat = find_idx("nat", "country", "nation", "ctry", "cntry")
+            idx_birth = find_idx("birth", "dob", "born","birthdate")
+            idx_age = find_idx("age")
+
+            out: list[dict] = []
+            for tr in target.find_all("tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 2:
+                    continue
+                # rank
+                rank_text = tds[idx_rank].get_text(strip=True) if idx_rank is not None and idx_rank < len(tds) else ""
+                if not rank_text or not rank_text[0].isdigit():
+                    continue
+                try:
+                    rank = int(re.sub(r"[^\d]", "", rank_text))
+                except Exception:
+                    continue
+                # name
+                name_cell = tds[idx_name] if idx_name is not None and idx_name < len(tds) else None
+                if not name_cell:
+                    continue
+                a = name_cell.find("a") if hasattr(name_cell, "find") else None
+                name_text = (a.get_text(strip=True) if a else name_cell.get_text(strip=True))
+                name_text = self._normalize(name_text)  # convert NBSP, collapse spaces, trim
+
+                # country
+                country = None
+                if idx_nat is not None and idx_nat < len(tds):
+                    country = self._extract_country_code(tds[idx_nat])
+
+                # birthdate / age
+                birthdate_iso = None
+                age_years = None
+                if idx_birth is not None and idx_birth < len(tds):
+                    cell = tds[idx_birth]
+                    raw = cell.get("data-sort") or cell.get("data-order") or cell.get_text(" ", strip=True)
+                    dt = self._parse_date(raw)
+                    if not dt:
+                        # try the visible text if data-sort didn't parse
+                        dt = self._parse_date(cell.get_text(" ", strip=True))
+                    if dt:
+                        birthdate_iso = dt.strftime("%Y-%m-%d")
+                        age_years = self._compute_age(dt)
+                if age_years is None and idx_age is not None and idx_age < len(tds):
+                    try:
+                        age_txt = tds[idx_age].get_text(strip=True).replace("\u00A0", " ")
+                        # Try to extract decimal age from text
+                        m = re.search(r"(\d{1,2}(?:\.\d{1,2})?)", age_txt)
+                        if m:
+                            age_years = float(m.group(1))
+                    except Exception:
+                        pass
+
+                out.append({
+                    "rank": rank,
+                    "name": name_text,
+                    "tour": tour,
+                    "country": country,
+                    "birthdate": birthdate_iso,
+                    "age": age_years,
+                })
+
+            out.sort(key=lambda r: (r["rank"], r["name"]))
+            return out
+        except Exception as e:
+            logging.exception(f"Failed to parse players for tour={tour}: {e}")
+            return []
+
+    def get_players(self, tour: str | None = None, force_refresh: bool = False) -> dict | list[dict]:
+        cache_obj = self._load_cache()
+        if cache_obj and not force_refresh and self._is_cache_valid(cache_obj):
+            if tour:
+                return cache_obj.get(tour.upper(), [])
+            return {"ATP": cache_obj.get("ATP", []), "WTA": cache_obj.get("WTA", [])}
+
+        result = {"ATP": None, "WTA": None}
+        for t in ("ATP", "WTA"):
+            try:
+                html = self._fetch_rankings_html(t)
+                result[t] = self._parse_players(html, tour=t)
+            except Exception as e:
+                logging.warning(f"Error fetching {t} rankings: {e}")
+                if cache_obj and cache_obj.get(t):
+                    logging.warning(f"Using stale cached players for {t}")
+                    result[t] = cache_obj.get(t, [])
+                else:
+                    result[t] = []
+
+        if any(result[t] for t in ("ATP", "WTA")):
+            expires_at = self._now() + float(self.cache_expire_hours) * 3600.0
+            cache_to_save = {"ATP": result["ATP"], "WTA": result["WTA"], "expires_at": expires_at, "updated_at": self._now()}
+            self._save_cache(cache_to_save)
+
+        if tour:
+            return result[tour.upper()]
+        return result
+
+    # ------------------- Suggestions (unchanged) -------------------
+    def suggest_players(self, query: str, limit: int = 10, tour: str | None = None) -> list[dict]:
+        if not query or len(query.strip()) < 2:
+            return []
+        qn = re.sub(r"[^a-zA-Z0-9]+", "", unicodedata.normalize("NFKD", query.strip()).lower())
+        data = self.get_players(tour=None) if tour is None else {tour.upper(): self.get_players(tour=tour)}
+        candidates: list[dict] = []
+        for t, arr in data.items():
+            for item in arr:
+                nm = item.get("name", "")
+                nn = re.sub(r"[^a-zA-Z0-9]+", "", unicodedata.normalize("NFKD", nm).lower())
+                idx = nn.find(qn)
+                if idx != -1:
+                    score = (idx, len(nn), item.get("rank") or 99999)
+                    candidates.append({"name": nm, "tour": item.get("tour", t), "rank": item.get("rank"), "_score": score})
+        candidates.sort(key=lambda x: x["_score"])
+        out = [{"label": c["name"], "value": c["name"], "tour": c["tour"]} for c in candidates[: max(1, int(limit))]]
+        return out
 
 class TennisDataScraper:
     def __init__(self):
@@ -697,6 +1014,7 @@ class TennisStatsCalculator:
 # Initialize global instances
 scraper = TennisDataScraper()
 calculator = TennisStatsCalculator()
+players_dir = TennisPlayersDirectory(session=scraper.session)
 
 # Convenience functions for backward compatibility
 def get_player_matches(player_name, force_refresh=False):
@@ -753,6 +1071,19 @@ def career(player_name):
     except Exception as e:
         logging.error(f"Error getting career stats for {player_name}: {str(e)}")
         return None
+    
+# Initialize or update global instance (reuse scraper session if it exists)
+try:
+    players_dir
+except NameError:
+    players_dir = TennisPlayersDirectory(session=scraper.session if 'scraper' in globals() else None)
+
+# Convenience functions
+def get_players(tour: str | None = None, force_refresh: bool = False):
+    return players_dir.get_players(tour=tour, force_refresh=force_refresh)
+
+def suggest_players(query: str, limit: int = 10, tour: str | None = None):
+    return players_dir.suggest_players(query=query, limit=limit, tour=tour)
 
 # Example usage (optional)
 if __name__ == '__main__':

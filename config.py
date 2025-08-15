@@ -1,5 +1,6 @@
 # API Configuration
 BASE_URL = 'https://www.tennisabstract.com'
+TA_REPORTS_BASE = f"{BASE_URL}/reports"
 REQUEST_DELAY = 0.5  # Delay between requests in seconds
 REQUEST_RETRIES = 3  # Number of retries for failed requests
 

@@ -15,7 +15,7 @@
     <link rel="stylesheet" type="text/css" href="https://cdn.datatables.net/1.11.5/css/dataTables.bootstrap5.min.css">
     <link rel="stylesheet" href="//code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">
     
-    <!-- Your Custom Stylesheet (LINK ADDED HERE) -->
+    <!-- Your Custom Stylesheet -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/custom.css') }}">
     
     <!-- Preload Chart.js -->
@@ -26,7 +26,7 @@
 <body>
     <nav class="navbar navbar-expand-lg navbar-dark">
         <div class="container">
-            <a class="navbar-brand" href="/">
+            <a class="navbar-brand" href="{{ url_for('index') }}">
                 Tennis Ball Knowledge
             </a>
             <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
@@ -35,17 +35,22 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="/compare">
+                        <a class="nav-link" href="{{ url_for('players') }}">
+                            <i class="fas fa-address-book"></i> Players
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('compare_players') }}">
                             <i class="fas fa-chart-bar"></i> Compare Players
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/h2h">
+                        <a class="nav-link" href="{{ url_for('head_to_head') }}">
                             <i class="fas fa-users"></i> Head to Head
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="/career">
+                        <a class="nav-link" href="{{ url_for('career_stats') }}">
                             <i class="fas fa-trophy"></i> Career Stats
                         </a>
                     </li>
@@ -85,6 +90,43 @@
     <script type="text/javascript" src="https://cdn.datatables.net/1.11.5/js/jquery.dataTables.min.js"></script>
     <script type="text/javascript" src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
     
-    {% block extra_js %}{% endblock %}
+    {% block extra_js %}
+<script>
+// Global helper for player autocomplete across pages
+window.PLAYER_SUGGEST_URL = "{{ url_for('player_suggest') }}";
+
+function attachAutocomplete(selector, options) {
+    var $el = $(selector);
+    if (!$el.length || typeof $el.autocomplete !== 'function') return;
+    
+    var minLen = (options && options.minLength) || 2;
+    var limit = (options && options.limit) || 10;
+    var tour = (options && options.tour) || null;
+    
+    $el.autocomplete({
+        minLength: minLen,
+        delay: 150,
+        source: function(request, response) {
+            var query = { q: request.term, limit: limit };
+            if (tour) query.tour = tour;
+            
+            $.getJSON(window.PLAYER_SUGGEST_URL, query, function(data) {
+                var items = (data && data.suggestions) ? data.suggestions : [];
+                response(items.map(function(it) {
+                    if (typeof it === 'string') return { label: it, value: it };
+                    return { label: it.label || it.name, value: it.value || it.name };
+                }));
+            });
+        }
+    });
+}
+
+$(function(){
+    if ($('#player').length) attachAutocomplete('#player');
+    if ($('#player1').length) attachAutocomplete('#player1');
+    if ($('#player2').length) attachAutocomplete('#player2');
+});
+</script>
+    {% endblock %}
 </body>
 </html>

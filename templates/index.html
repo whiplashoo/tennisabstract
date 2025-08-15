@@ -4,101 +4,94 @@
 <style>
     .feature-card {
         height: 100%;
-        min-height: 350px; /* Minimum height for cards */
+        min-height: 350px;
         transition: all 0.3s ease;
         border: 2px solid transparent;
     }
-    
     .feature-card:hover {
         transform: translateY(-5px);
         box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-        border-color: var(--tennis-green);
+        border-color: var(--secondary-color);
     }
-    
     .feature-card .card-body {
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        padding: 2.5rem 2rem; /* Increase padding for bigger cards */
+        padding: 2.0rem 1.75rem;
     }
-    
     .feature-card i {
-        font-size: 4rem; /* Bigger icons */
-        margin-bottom: 1.5rem;
+        font-size: 3.5rem;
+        margin-bottom: 1.25rem;
     }
-    
     .feature-card .card-title {
-        font-size: 1.5rem; /* Bigger titles */
-        margin-bottom: 1rem;
+        font-size: 1.4rem;
+        margin-bottom: 0.75rem;
     }
-    
     .feature-card .card-text {
-        flex-grow: 1; /* Push buttons to bottom */
-        margin-bottom: 1.5rem;
-    }
-    
-    /* Equal height columns */
-    .feature-row {
-        display: flex;
-        flex-wrap: wrap;
-    }
-    
-    .feature-row > [class*='col-'] {
-        display: flex;
-        flex-direction: column;
+        flex-grow: 1;
+        margin-bottom: 1.0rem;
     }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="text-center mb-5">
-    <h1 class="display-4">Welcome to Tennis Ball Knowledge</h1>
+<div class="text-center mb-4">
+    <h1 class="display-5">Welcome to Tennis Ball Knowledge</h1>
     <p class="lead">Analyze ATP and WTA player statistics, compare players, and view head-to-head records</p>
 </div>
 
-<div class="row feature-row">
-    <!-- Change col-md-4 to col-lg-4 for different breakpoints -->
-    <div class="col-sm-12 col-md-6 col-lg-4 mb-4">
+<div class="row">
+    <div class="col-sm-12 col-md-6 col-lg-3 mb-4">
+        <div class="card feature-card shadow">
+            <div class="card-body text-center">
+                <i class="fas fa-address-book text-info"></i>
+                <h5 class="card-title">Players</h5>
+                <p class="card-text">Browse ranked players with country and age, and open their career stats quickly.</p>
+                <a href="{{ url_for('players') }}" class="btn btn-info btn-lg text-white">Browse Players</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-sm-12 col-md-6 col-lg-3 mb-4">
         <div class="card feature-card shadow">
             <div class="card-body text-center">
                 <i class="fas fa-chart-bar text-primary"></i>
                 <h5 class="card-title">Compare Players</h5>
-                <p class="card-text">Compare two players' statistics for any year</p>
-                <a href="/compare" class="btn btn-primary btn-lg">Compare Now</a>
+                <p class="card-text">Compare two players' statistics for any year.</p>
+                <a href="{{ url_for('compare_players') }}" class="btn btn-primary btn-lg">Compare Now</a>
             </div>
         </div>
     </div>
     
-    <div class="col-sm-12 col-md-6 col-lg-4 mb-4">
+    <div class="col-sm-12 col-md-6 col-lg-3 mb-4">
         <div class="card feature-card shadow">
             <div class="card-body text-center">
                 <i class="fas fa-users text-success"></i>
                 <h5 class="card-title">Head to Head</h5>
-                <p class="card-text">View the complete match history between any two players</p>
-                <a href="/h2h" class="btn btn-success btn-lg">View H2H</a>
+                <p class="card-text">View the complete match history between any two players.</p>
+                <a href="{{ url_for('head_to_head') }}" class="btn btn-success btn-lg">View H2H</a>
             </div>
         </div>
     </div>
     
-    <div class="col-sm-12 col-md-6 col-lg-4 mb-4">
+    <div class="col-sm-12 col-md-6 col-lg-3 mb-4">
         <div class="card feature-card shadow">
             <div class="card-body text-center">
                 <i class="fas fa-trophy text-warning"></i>
                 <h5 class="card-title">Career Stats</h5>
-                <p class="card-text">Explore a player's year-by-year career statistics</p>
-                <a href="/career" class="btn btn-warning btn-lg">View Career</a>
+                <p class="card-text">Explore a player's year-by-year career statistics.</p>
+                <a href="{{ url_for('career_stats') }}" class="btn btn-warning btn-lg">View Career</a>
             </div>
         </div>
     </div>
 </div>
 
-<div class="mt-5">
+<div class="mt-3">
     <h3>Features</h3>
     <ul>
-        <li>Comprehensive statistics including serve percentages, break points, and more</li>
-        <li>Support for both ATP (male) and WTA (female) players</li>
-        <li>Real-time data from Tennis Abstract database</li>
+        <li>Current rankings with country and age</li>
+        <li>Career, H2H, and comparison analytics</li>
+        <li>Fast search with autocomplete</li>
     </ul>
 </div>
-
 {% endblock %}
