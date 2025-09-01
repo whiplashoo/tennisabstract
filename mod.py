@@ -1,20 +1,23 @@
+import ast
+import logging
+import os
+import pickle
+import re
+import time
 import unicodedata
+from datetime import date as dt_date
+from datetime import datetime
+from functools import lru_cache
+
+import demjson3 as demjson
+import numpy as np
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
-import pandas as pd
-import logging
-import demjson3 as demjson
-import time
-import numpy as np
-import re
-import ast
-from functools import lru_cache
-from datetime import datetime, date as dt_date
-import pickle
-import os
-from config import (BASE_URL,TA_REPORTS_BASE, REQUEST_DELAY, REQUEST_RETRIES,
-                    CACHE_EXPIRE_HOURS, DATABASE_PATH)
-from database import TennisDatabase
+
+from .config import (BASE_URL, CACHE_EXPIRE_HOURS, DATABASE_PATH,
+                     REQUEST_DELAY, REQUEST_RETRIES, TA_REPORTS_BASE)
+from .database import TennisDatabase
 
 # Tournament round order for sorting
 ROUND_SORT_ORDER = {
@@ -81,8 +84,18 @@ class TennisPlayersDirectory:
                 cache_dir = "."
             os.makedirs(cache_dir, exist_ok=True)
             self.cache_path = os.path.join(cache_dir, "players_cache.pkl")
+            # Profile HTML cache
+            self.profile_cache_dir = os.path.join(cache_dir, "cache", "profiles")
+            os.makedirs(self.profile_cache_dir, exist_ok=True)
+            self.profile_ttl_seconds = int(self.cache_expire_hours * 3600)
         except Exception:
             self.cache_path = os.path.join(os.path.dirname(__file__), "players_cache.pkl")
+            self.profile_cache_dir = os.path.join(os.path.dirname(__file__), "cache", "profiles")
+            try:
+                os.makedirs(self.profile_cache_dir, exist_ok=True)
+            except Exception:
+                pass
+            self.profile_ttl_seconds = int(CACHE_EXPIRE_HOURS * 3600)
 
     def _now(self) -> float:
         return time.time()
@@ -362,6 +375,227 @@ class TennisPlayersDirectory:
             return result[tour.upper()]
         return result
 
+    # --------- Player profile enrichment from player-classic page ---------
+    def _fetch_player_profile_html(self, name: str) -> str | None:
+        try:
+            safe = re.sub(r'[^a-zA-Z0-9]+', '', name)
+            path = os.path.join(self.profile_cache_dir, f"{safe}.html")
+            # serve from cache if fresh
+            if os.path.exists(path):
+                try:
+                    import time as _time
+                    if _time.time() - os.path.getmtime(path) < self.profile_ttl_seconds:
+                        with open(path, 'r', encoding='utf-8') as f:
+                            return f.read()
+                except Exception:
+                    pass
+
+            url_name = name.replace(' ', '')
+            url = f"{BASE_URL}/cgi-bin/player-classic.cgi?p={url_name}"
+            resp = scraper._make_request(url)
+            html = resp.text
+            try:
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write(html)
+            except Exception:
+                pass
+            return html
+        except Exception as e:
+            logging.warning(f"Failed to fetch profile page for {name}: {e}")
+            return None
+
+    @staticmethod
+    def _parse_profile_fields(html: str) -> dict:
+        """Parse current rank, peak rank, handedness/backhand, age, birthdate from the profile table snippet."""
+        if not html:
+            return {}
+        soup = BeautifulSoup(html, 'html.parser')
+        # First, try to parse from inline JS variables, which are reliable on TA pages
+        js_text = html
+        try:
+            # currentrank, peakrank
+            m_cur = re.search(r"var\s+currentrank\s*=\s*([0-9]+|""|'')\s*;", js_text)
+            m_peak = re.search(r"var\s+peakrank\s*=\s*([0-9]+|""|'')\s*;", js_text)
+            # dob as yyyymmdd
+            m_dob = re.search(r"var\s+dob\s*=\s*([0-9]{8})\s*;", js_text)
+            # hand 'L'/'R'
+            m_hand = re.search(r"var\s+hand\s*=\s*'([LR])'\s*;", js_text)
+            # backhand '1'/'2'
+            m_bh = re.search(r"var\s+backhand\s*=\s*'([12])'\s*;", js_text)
+            # wiki id like 'Yoshihito_Nishioka'
+            m_wiki = re.search(r"var\s+wiki_id\s*=\s*'([^']+)'\s*;", js_text)
+        except Exception:
+            m_cur = m_peak = m_dob = m_hand = m_bh = m_wiki = None
+
+        current_rank = None
+        peak_rank = None
+        handedness = None
+        backhand_style = None
+        age_years = None
+        birthdate_iso = None
+
+        if m_cur:
+            try:
+                val = m_cur.group(1)
+                if val and val.strip('"\''):
+                    current_rank = int(val)
+            except Exception:
+                pass
+        if m_peak:
+            try:
+                val = m_peak.group(1)
+                if val and val.strip('"\''):
+                    peak_rank = int(val)
+            except Exception:
+                pass
+        if m_dob:
+            try:
+                s = m_dob.group(1)
+                birthdate_iso = f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+            except Exception:
+                birthdate_iso = None
+        if m_hand:
+            handedness = 'Left' if m_hand.group(1) == 'L' else 'Right'
+        if m_bh:
+            backhand_style = 'Two-handed backhand' if m_bh.group(1) == '2' else 'One-handed backhand'
+        wiki_id = m_wiki.group(1) if m_wiki else None
+
+        # If some fields missing, fall back to textual parsing below
+        raw_text = soup.get_text("\n", strip=True)
+        # Normalize unicode spaces and dashes to improve regex robustness
+        text = (raw_text
+                .replace("\u00A0", " ")
+                .replace("\u2011", "-")  # non-breaking hyphen
+                .replace("\u2012", "-")
+                .replace("\u2013", "-")
+                .replace("\u2014", "-")
+                .replace("\u2212", "-")
+        )
+        # Current rank (bold number inside may be adjacent)
+        if current_rank is None:
+            m = re.search(r"Current\s*rank\s*:\s*(?:<[^>]+>\s*)?\b(\d+)\b", text, re.IGNORECASE)
+        else:
+            m = None
+        if m:
+            try:
+                current_rank = int(m.group(1))
+            except Exception:
+                pass
+        # Peak rank / Career high rank (e.g., "Peak rank: 1 (10-Jun-2024)")
+        if peak_rank is None:
+            m = re.search(r"(Peak|Career\s*high)\s*rank\s*:\s*\b(\d+)\b", text, re.IGNORECASE)
+        else:
+            m = None
+        if m:
+            try:
+                peak_rank = int(m.group(2))
+            except Exception:
+                pass
+        # Plays: Right (two-handed backhand) — allow various hyphen characters
+        if handedness is None or backhand_style is None:
+            m = re.search(r"Plays\s*:\s*([A-Za-z]+)\s*\(([^)]+backhand)\)", text, re.IGNORECASE)
+        else:
+            m = None
+        if m:
+            handedness = m.group(1).capitalize()
+            backhand_style = m.group(2)
+        else:
+            m2 = re.search(r"Plays\s*:\s*([A-Za-z]+)\b", text, re.IGNORECASE) if handedness is None else None
+            if m2:
+                handedness = m2.group(1).capitalize()
+        # Normalize backhand style to expected labels
+        if backhand_style:
+            bl = backhand_style.lower()
+            if re.search(r"two\s*[- ]?handed\s*backhand", bl):
+                backhand_style = "Two-handed backhand"
+            elif re.search(r"one\s*[- ]?handed\s*backhand", bl):
+                backhand_style = "One-handed backhand"
+
+        # Age: 24 (16-Aug-2001)
+        m = None if birthdate_iso is not None else re.search(r"Age\s*:\s*([0-9]{1,2}(?:\.[0-9])?)\s*\(([^)]+)\)", text, re.IGNORECASE)
+        if m:
+            try:
+                age_years = float(m.group(1))
+            except Exception:
+                pass
+            # parse date
+            raw = m.group(2)
+            for fmt in ("%d-%b-%Y", "%d-%B-%Y", "%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y"):
+                try:
+                    birthdate_iso = datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+                    break
+                except Exception:
+                    continue
+        else:
+            # Sometimes shows only date of birth
+            m3 = None if birthdate_iso is not None else re.search(r"\((\d{1,2}-[A-Za-z]{3,}-\d{4})\)", text)
+            if m3:
+                raw = m3.group(1)
+                for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+                    try:
+                        birthdate_iso = datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+                        break
+                    except Exception:
+                        continue
+
+        return {
+            'current_rank': current_rank,
+            'peak_rank': peak_rank,
+            'handedness': handedness,
+            'backhand_style': backhand_style,
+            'age_years': age_years,
+            'birthdate': birthdate_iso,
+            'wiki_id': wiki_id
+        }
+
+    def enrich_and_save_players(self, tour: str | None = None, force_refresh: bool = False) -> dict | list[dict]:
+        """Fetch rankings, enrich each player with profile fields, and upsert into SQLite."""
+        data = self.get_players(tour=tour, force_refresh=force_refresh)
+        if tour:
+            players_lists = {tour.upper(): data}
+        else:
+            players_lists = data
+
+        for t, players in players_lists.items():
+            for p in players:
+                name = p.get('name')
+                try:
+                    html = self._fetch_player_profile_html(name)
+                    prof = self._parse_profile_fields(html) if html else {}
+                    # Fallback to parsed rank/age/birthdate from rankings page if profile missing
+                    if prof.get('current_rank') is None:
+                        prof['current_rank'] = p.get('rank')
+                    if prof.get('birthdate') is None and p.get('birthdate'):
+                        prof['birthdate'] = p.get('birthdate')
+                    if prof.get('age_years') is None and p.get('age') is not None:
+                        try:
+                            prof['age_years'] = float(p.get('age'))
+                        except Exception:
+                            pass
+                    db.upsert_player_profile(name, prof)
+                    # also attach to object returned
+                    p.update({
+                        'current_rank': prof.get('current_rank'),
+                        'peak_rank': prof.get('peak_rank'),
+                        'handedness': prof.get('handedness'),
+                        'backhand_style': prof.get('backhand_style'),
+                        'age': prof.get('age_years', p.get('age')),
+                        'birthdate': prof.get('birthdate', p.get('birthdate')),
+                    })
+                except Exception as e:
+                    logging.warning(f"Failed to enrich player {name}: {e}")
+                    # still upsert minimal fields
+                    db.upsert_player_profile(name, {
+                        'current_rank': p.get('rank'),
+                        'peak_rank': None,
+                        'handedness': None,
+                        'backhand_style': None,
+                        'age_years': p.get('age'),
+                        'birthdate': p.get('birthdate')
+                    })
+
+        return players_lists if not tour else players_lists.get(tour.upper(), [])
+
     # ------------------- Suggestions (unchanged) -------------------
     def suggest_players(self, query: str, limit: int = 10, tour: str | None = None) -> list[dict]:
         if not query or len(query.strip()) < 2:
@@ -395,17 +629,32 @@ class TennisDataScraper:
         return session
 
     def _make_request(self, url, retries=REQUEST_RETRIES, delay=REQUEST_DELAY):
-        """Make HTTP request with retry logic"""
+        """Make HTTP request with retry logic, jitter, and 429-aware backoff."""
+        import random
+        backoff = max(0.5, float(delay))
         for attempt in range(retries):
             try:
-                time.sleep(delay * (attempt + 1))
-                response = self.session.get(url)
+                time.sleep(backoff + random.uniform(0.1, 0.7))
+                response = self.session.get(url, timeout=20)
+                if response.status_code == 429:
+                    retry_after = response.headers.get('Retry-After')
+                    try:
+                        wait = int(retry_after)
+                    except Exception:
+                        wait = max(60, int(backoff * 3))
+                    logging.error(f"Attempt {attempt + 1} got 429 for {url}; sleeping {wait}s")
+                    time.sleep(wait)
+                    backoff = min(backoff * 2, 60)
+                    continue
                 response.raise_for_status()
                 return response
             except requests.RequestException as e:
                 logging.error(f"Attempt {attempt + 1} failed for {url}: {str(e)}")
                 if attempt == retries - 1:
                     raise
+                sleep_s = min(max(5, int(backoff * 2 + random.uniform(0.5, 1.5))), 90)
+                time.sleep(sleep_s)
+                backoff = min(backoff * 2, 60)
 
     def get_player_matches(self, player_name, force_refresh=False):
         """Get all matches for a player with database caching and tb backfill"""
